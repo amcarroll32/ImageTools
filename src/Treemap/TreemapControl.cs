@@ -549,7 +549,16 @@ public sealed class TreemapControl : FrameworkElement
             alertIcon = MakeIcon(Theme.AlertGlyph, 13, healthBrush);
             alertText = MakeText(node.Hardware!.HealthLabel, ink, 12, true, 120);
         }
-        double alertWidth = alertIcon != null ? alertIcon.Width + 5 + alertText!.Width + 12 : 0;
+        // A camera card says whether it has new images for its archive.
+        FormattedText? badgeIcon = null, badgeText = null;
+        if (node.ImportBadge is { } badge && !node.IsScanning)
+        {
+            var badgeBrush = node.ImportBadgeGood ? Theme.StatusGood : Theme.AccentText;
+            badgeIcon = MakeIcon(node.ImportBadgeGood ? "" : "", 13, badgeBrush);
+            badgeText = MakeText(badge, node.ImportBadgeGood ? ink : Theme.AccentText, 12, true, 200);
+        }
+        double alertWidth = (alertIcon != null ? alertIcon.Width + 5 + alertText!.Width + 12 : 0)
+                            + (badgeIcon != null ? badgeIcon.Width + 5 + badgeText!.Width + 12 : 0);
 
         // The name and health alert matter most: if they don't fit, shorten the stats to just the
         // free space, then drop them (the capacity bar still shows how full the drive is).
@@ -568,11 +577,17 @@ public sealed class TreemapControl : FrameworkElement
         {
             var title = MakeText(node.DisplayName, ink, 13, true, titleWidth);
             dc.DrawText(title, new Point(x, band.Y + 4));
+            double ax = x + title.WidthIncludingTrailingWhitespace + 12;
             if (alertIcon != null)
             {
-                double ax = x + title.WidthIncludingTrailingWhitespace + 12;
                 dc.DrawText(alertIcon, new Point(ax, band.Y + 6));
                 dc.DrawText(alertText!, new Point(ax + alertIcon.Width + 5, band.Y + 5));
+                ax += alertIcon.Width + 5 + alertText!.Width + 12;
+            }
+            if (badgeIcon != null)
+            {
+                dc.DrawText(badgeIcon, new Point(ax, band.Y + 6));
+                dc.DrawText(badgeText!, new Point(ax + badgeIcon.Width + 5, band.Y + 5));
             }
         }
         if (showStats)

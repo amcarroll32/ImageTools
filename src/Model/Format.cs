@@ -54,6 +54,13 @@ public static class Format
             : $"{(int)years} years ago";
     }
 
+    /// <summary>"E:\Photos\Canon EOS 60D\Card2\100CANON" → "E:\…\Card2\100CANON": the drive and the last two folders.</summary>
+    public static string ShortPath(string path)
+    {
+        var parts = path.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length <= 3 ? path : $@"{parts[0]}\…\{parts[^2]}\{parts[^1]}";
+    }
+
     public static string Duration(TimeSpan t) =>
         t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds}s" : $"{t.TotalSeconds:N1}s";
 }

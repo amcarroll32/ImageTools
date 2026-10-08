@@ -10,22 +10,7 @@
         UseLayoutRounding="True">
 
     <Window.Resources>
-        <!-- Theme brushes: dark defaults here, replaced from Treemap.Theme when the theme changes. -->
-        <SolidColorBrush x:Key="WindowBg" Color="#1a1a19" />
-        <SolidColorBrush x:Key="Hairline" Color="#383835" />
-        <SolidColorBrush x:Key="InkPrimary" Color="#ffffff" />
-        <SolidColorBrush x:Key="InkSecondary" Color="#c3c2b7" />
-        <SolidColorBrush x:Key="InkMuted" Color="#898781" />
-        <SolidColorBrush x:Key="AccentInk" Color="#6da7ec" />
-        <SolidColorBrush x:Key="AccentFill" Color="#3987e5" />
-        <SolidColorBrush x:Key="CardBg" Color="#242422" />
-        <SolidColorBrush x:Key="CardBorder" Color="#383835" />
-        <SolidColorBrush x:Key="TipBg" Color="#F2232321" />
-        <SolidColorBrush x:Key="TipBorder" Color="#4a4a46" />
-        <SolidColorBrush x:Key="BadgeBg" Color="#1f2d40" />
-        <SolidColorBrush x:Key="BarTrack" Color="#2c2c2a" />
-        <SolidColorBrush x:Key="LinkHover" Color="#2e2e2b" />
-        <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+        <!-- Theme brushes and the Icons font live in the application resources (see App.ApplyTheme). -->
 
         <Style x:Key="CrumbButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="Transparent" />
@@ -299,6 +284,41 @@
                         <Border Grid.ColumnSpan="2" Background="{DynamicResource BarTrack}" CornerRadius="3" />
                         <Border x:Name="CapacityBar" CornerRadius="3" Background="{DynamicResource AccentFill}" />
                     </Grid>
+
+                    <!-- Camera cards with images that aren't in their archive folders yet -->
+                    <ItemsControl x:Name="ImportBanners" Margin="-4,10,-4,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,0,0,6" Padding="12,10,12,4" CornerRadius="6" Background="{DynamicResource CardBg}"
+                                        BorderBrush="{DynamicResource CardBorder}" BorderThickness="1">
+                                    <StackPanel>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="&#xE7F1;" FontFamily="{StaticResource Icons}" FontSize="15" Margin="0,1,8,0" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="2" Text="{Binding SizeText}" FontWeight="SemiBold" Margin="10,0,0,0" />
+                                        </Grid>
+                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource Icons}" FontSize="12"
+                                                       Foreground="{Binding BadgeBrush}" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding BadgeText}" FontSize="12" FontWeight="SemiBold" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Advice}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,6"
+                                                   Foreground="{DynamicResource InkSecondary}" />
+                                        <WrapPanel Visibility="{Binding ReviewVisibility}">
+                                            <Button Style="{StaticResource SmallButton}" Content="Review import…" Tag="{Binding Status}"
+                                                    Click="ReviewImport_Click"
+                                                    ToolTip="Choose images and preview exactly what would be copied. Nothing changes until you apply." />
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
 
                 <!-- Legend -->

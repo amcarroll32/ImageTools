@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private int _activeBatches;
     private Analyzer? _analyzer;
     private DupResult? _dups;
+    private List<CardStatus> _cardStatus = [];
     private FsNode? _tipNode;
     private Point _tipPoint;
     private int _tick;
@@ -134,6 +135,7 @@ public partial class MainWindow : Window
         _analysisCts?.Cancel();
         _analyzer = null;
         _dups = null;
+        _cardStatus = [];
         _disks = null;
         _diskQuery = null;
         NavigateTo(pc);
@@ -233,7 +235,7 @@ public partial class MainWindow : Window
         UpdateStatus();
     }
 
-    private sealed record DriveProbe(string Name, string Label, long TotalSize, long FreeSize, bool IsRemovable, bool HasDcim, string? Format);
+    private sealed record DriveProbe(string Name, string Label, long TotalSize, long FreeSize, bool IsRemovable, bool HasDcim, string? Format, uint Serial);
 
     /// <summary>
     /// Checks a drive on a background thread (an unready drive can take 20+ seconds to say so),
@@ -248,7 +250,8 @@ public partial class MainWindow : Window
             {
                 return drive.IsReady
                     ? new DriveProbe(drive.Name, drive.VolumeLabel, drive.TotalSize, drive.TotalFreeSpace, drive.DriveType == DriveType.Removable,
-                        drive.DriveType == DriveType.Removable && Directory.Exists(Path.Join(drive.Name, "DCIM")), drive.DriveFormat)
+                        drive.DriveType == DriveType.Removable && Directory.Exists(Path.Join(drive.Name, "DCIM")), drive.DriveFormat,
+                        drive.DriveType == DriveType.Removable ? VolumeInfo.Serial(drive.Name) : 0)
                     : null;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -295,6 +298,7 @@ public partial class MainWindow : Window
             Capacity = local ? probe.TotalSize : 0,
             IsRemovable = probe.IsRemovable,
             HasDcimFolder = probe.HasDcim,
+            VolumeSerial = probe.Serial,
             FreeSize = local ? probe.FreeSize : 0,
             IsScanning = true,
             Source = entry.Source,
@@ -499,6 +503,7 @@ public partial class MainWindow : Window
             if (cts.IsCancellationRequested || _analyzer != analyzer)
                 return;
             _dups = dups;
+            UpdateCardSync();
             Map.Invalidate();
             RefreshSidePanel();
             RefreshCards();
@@ -532,9 +537,97 @@ public partial class MainWindow : Window
 
         if (_activeBatches == 0)
             _progressTimer.Stop();
+        UpdateCardSync(); // dates taken are known now, so "new since the last import" is more exact
         Map.Invalidate();
         RefreshSidePanel();
         UpdateStatus();
+    }
+
+    // ---- Camera cards ----
+
+    private sealed record ImportBanner(
+        CardStatus Status,
+        string Title,
+        string SizeText,
+        string Glyph,
+        string BadgeText,
+        Brush BadgeBrush,
+        string Advice,
+        Visibility ReviewVisibility);
+
+    /// <summary>Pairs each memory card's folders with their archive folders and badges the card.</summary>
+    private void UpdateCardSync()
+    {
+        var pc = _pc;
+        if (pc == null || _dups == null)
+        {
+            _cardStatus = [];
+            return;
+        }
+        foreach (var d in pc.Children!)
+            d.ImportBadge = null;
+
+        _cardStatus = CardSync.Find(ViewRoots(pc), App.Settings.CardArchives, out bool remembered);
+        if (remembered)
+            App.Settings.Save();
+
+        foreach (var s in _cardStatus)
+        {
+            if (s.NewCount > 0)
+                (s.Card.ImportBadge, s.Card.ImportBadgeGood) = ($"{Format.Count(s.NewCount)} new to import", false);
+            else if (s.UpToDate)
+                (s.Card.ImportBadge, s.Card.ImportBadgeGood) = ("Archived", true);
+        }
+    }
+
+    private void ShowImportBanners(FsNode view)
+    {
+        ImportBanners.ItemsSource = _cardStatus
+            .Where(s => view.Kind == NodeKind.Root || view.Drive == s.Card)
+            .Select(MakeImportBanner)
+            .ToList();
+    }
+
+    private static ImportBanner MakeImportBanner(CardStatus s)
+    {
+        string title = $"Camera card {s.Card.DisplayName}";
+        var targets = s.Folders.Where(f => f.Count(ImportBucket.New) > 0).Select(f => Format.ShortPath(f.ArchivePath)).ToList();
+        string where = targets.Count switch
+        {
+            0 => "",
+            1 => targets[0],
+            _ => $"{targets[0]} and {Format.Count(targets.Count - 1, "more folder", "more folders")}",
+        };
+        string others = s.OtherCount > 0
+            ? $" {Format.Count(s.OtherCount, "older image or copy", "older images or copies")} found elsewhere aren't ticked."
+            : "";
+        string unmatched = s.Unmatched.Count > 0
+            ? $" {Format.Count(s.UnmatchedImages, "image", "images")} in {string.Join(", ", s.Unmatched.Select(f => f.Name))} have no archive folder yet."
+            : "";
+
+        if (s.NewCount > 0)
+        {
+            long first = s.NewItems.Min(i => i.Image.DateTicks), last = s.NewItems.Max(i => i.Image.DateTicks);
+            string taken = Format.Date(first) == Format.Date(last) ? Format.Date(first) : $"{Format.Date(first)} – {Format.Date(last)}";
+            return new ImportBanner(s, title, Format.Bytes(s.NewBytes), "", Format.Count(s.NewCount, "new image", "new images"), Theme.AccentText,
+                $"Taken {taken}. Not yet in {where}.{others}{unmatched}", Visibility.Visible);
+        }
+        if (s.OtherCount > 0)
+            return new ImportBanner(s, title, "", "", "No new images", Theme.StatusGood,
+                $"Nothing newer than the archive.{others} Review to sync the whole card.{unmatched}", Visibility.Visible);
+        if (s.UpToDate)
+            return new ImportBanner(s, title, "", "", "Archived", Theme.StatusGood,
+                $"Every image on the card is already in {string.Join(", ", s.Folders.Select(f => Format.ShortPath(f.ArchivePath)).Distinct())}.",
+                Visibility.Collapsed);
+        return new ImportBanner(s, title, "", "", "No archive folder found", Theme.MutedText,
+            $"{Format.Count(s.UnmatchedImages, "image", "images")} on the card aren't in any archive folder. Import them once by hand and " +
+            "Image Tools will follow the card from then on.", Visibility.Collapsed);
+    }
+
+    private void ReviewImport_Click(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).Tag is CardStatus status)
+            new ImportWindow(status) { Owner = this }.ShowDialog();
     }
 
     // ---- Navigation ----
@@ -686,7 +779,8 @@ public partial class MainWindow : Window
         string disk = contentOnly ? "" : $"  ·  {Format.Bytes(drive.FreeSize)} free of {Format.Bytes(drive.Capacity)}";
         string detail = drive.IsScanning
             ? (drive.ScanError != null ? "scan failed" : "scanning…") + disk
-            : Format.Count(drive.VisibleCount(ShowAssets), "image", "images") + DupSuffix(drive) + disk;
+            : (drive.ImportBadge is { } badge ? badge + "  ·  " : "")
+              + Format.Count(drive.VisibleCount(ShowAssets), "image", "images") + DupSuffix(drive) + disk;
         var hw = drive.Hardware;
         var health = hw?.Health ?? DiskHealth.Unknown;
         var healthBrush = Theme.HealthBrush(health);
@@ -781,6 +875,7 @@ public partial class MainWindow : Window
             rows.AddRange(_entries.Where(e => !IsIncluded(e)).Select(MakeSkippedRow));
         ContentsList.ItemsSource = rows;
         ShowCapacity(node);
+        ShowImportBanners(node);
         ShowLibraries(node);
         RefreshLegend();
     }
@@ -1707,24 +1802,8 @@ public partial class MainWindow : Window
         RefreshCards();
     }
 
-    /// <summary>Pushes the current palette into the window's brush resources (used via DynamicResource).</summary>
     private void ApplyThemeResources()
     {
-        Resources["WindowBg"] = Theme.WindowBackground;
-        Resources["Hairline"] = Theme.Hairline;
-        Resources["InkPrimary"] = Theme.PrimaryText;
-        Resources["InkSecondary"] = Theme.SecondaryText;
-        Resources["InkMuted"] = Theme.MutedText;
-        Resources["AccentInk"] = Theme.AccentText;
-        Resources["AccentFill"] = Theme.Accent;
-        Resources["CardBg"] = Theme.CardBackground;
-        Resources["CardBorder"] = Theme.CardBorder;
-        Resources["TipBg"] = Theme.TipBackground;
-        Resources["TipBorder"] = Theme.TipBorder;
-        Resources["BadgeBg"] = Theme.BadgeBackground;
-        Resources["BarTrack"] = Theme.BarTrack;
-        Resources["LinkHover"] = Theme.LinkHover;
-
         // The button shows the mode you'd switch to.
         ThemeGlyph.Text = Theme.IsDark ? "" : "";
         ThemeButton.ToolTip = Theme.IsDark ? "Switch to light mode" : "Switch to dark mode";

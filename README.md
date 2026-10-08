@@ -15,6 +15,7 @@ A fast, read-only Windows app that finds every photo and image on your drives, s
 - **Libraries.** Camera folders (DCIM, 100CANON…), screenshots, messaging apps (WhatsApp, Telegram…), Downloads, Pictures, Desktop and Documents, backups and exports, and the Recycle Bin are recognized by name. The **Libraries** tab lists them, and **Color: Library** shows them on the map.
 - **Exact duplicates.** Images are compared byte for byte in stages, so most files are never read in full: same size, then the same first 64 KB, then the same SHA-256 of the whole file. The **Duplicates** tab lists them by wasted space, and hovering a duplicate outlines its copies on the map.
 - **Folder matches.** Finds folders that hold the same images, such as a camera folder copied twice where one copy has 300 more photos. Pairs that are identical, or entirely inside another folder, come first: they're the easiest to consolidate.
+- **Camera cards.** When a memory card is plugged in, each camera folder on it (DCIM\100CANON…) is paired with the folder it's archived to on your PC: the folder holding at least half its photos, the one it matched on an earlier scan, or a new folder next to the card's other archived folders. Photos shot since the last import are flagged on the card's tile and in an **Import** card. **Review import…** lists them, ticked; older photos missing from the archive (perhaps deleted on purpose) and photos already elsewhere on the PC are listed but not ticked, and **Select all** ticks everything for a full card → archive sync. **Preview changes** then shows every folder to create and every copy with its final name; a name that's already taken gets a " (2)" suffix, marked in the preview and in the report. *In this beta the preview is as far as it goes: Apply is switched off.*
 - **Photo details for later.** Date taken, camera, dimensions, star rating and Windows tags are read through the Windows property system (the same values Explorer shows) and kept with each image, along with its folder.
 - **Fast rescans.** Hashes and details are cached next to the exe, keyed on each file's size and date, so a rescan only reads files that changed.
 - **Cloud-safe.** Online-only OneDrive and cloud-sync files are listed by name and size but never opened, so nothing is downloaded. Network and cloud drives are skipped unless you include them from the **Drives** menu.
@@ -57,6 +58,9 @@ dotnet run -c Release
 | `src/Scanning/DriveScanner.cs` | Multi-threaded directory scan that keeps only images and classifies folders as it goes |
 | `src/Scanning/Analyzer.cs` | Duplicate check (size → first 64 KB → SHA-256), folder matches, and photo details |
 | `src/Model/Libraries.cs` | Folder-name rules for libraries and app assets |
+| `src/Model/CardSync.cs` | Pairs camera-card folders with their archive folders and finds what's new |
+| `src/Platform/ImportPlanner.cs` | Turns a selection into the exact list of changes (preview only) |
+| `ImportWindow.xaml(.cs)` | Choose images, then preview changes |
 | `src/Model/` | Tree nodes, image formats, duplicate groups, search and formatting |
 | `src/Platform/` | Hash cache, Windows property reader, previews, elevation, disks and settings |
 | `src/Treemap/` | Squarified treemap drawing and hit testing, and the color theme |

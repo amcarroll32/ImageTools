@@ -102,6 +102,13 @@ public sealed class FsNode
     /// <summary>Removable volume with a DCIM folder at its root, i.e. almost certainly a camera card.</summary>
     public bool HasDcimFolder { get; set; }
 
+    /// <summary>Volume serial number (removable drives only), so a camera card is recognized next time.</summary>
+    public uint VolumeSerial { get; set; }
+
+    /// <summary>Camera cards: "33 new to import" or "Archived"; drawn in the drive's title band.</summary>
+    public string? ImportBadge { get; set; }
+    public bool ImportBadgeGood { get; set; }
+
     /// <summary>Physical disk, device kind and health (drives only; null until the disk query finishes).</summary>
     public DriveHardware? Hardware { get; set; }
 

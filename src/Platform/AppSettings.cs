@@ -25,6 +25,12 @@ public sealed class AppSettings
     /// <summary>Per-drive overrides, e.g. {"G:": true, "D:": false}; drives not listed follow the default.</summary>
     public Dictionary<string, bool> DriveChoices { get; set; } = [];
 
+    /// <summary>
+    /// Camera card folder → archive folder pairings found on earlier scans, keyed by
+    /// "volume serial|folder path on the card" (e.g. "1A2B3C4D|DCIM\100CANON").
+    /// </summary>
+    public Dictionary<string, string> CardArchives { get; set; } = [];
+
     public static AppSettings Load()
     {
         // The portable file wins; the per-user file covers read-only locations.
