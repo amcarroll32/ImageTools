@@ -17,3 +17,4 @@ publish/
 ImageTools.cache
 ImageTools.cache.tmp
 ImageTools.settings.json
+ImageTools logs/

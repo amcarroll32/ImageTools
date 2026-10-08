@@ -6,7 +6,8 @@ namespace ImageTools.Platform;
 
 /// <summary>One file to copy: an image or a sidecar that travels with it.</summary>
 /// <param name="Note">Why the target name differs from the source name, if it does.</param>
-public sealed record PlannedCopy(string Source, string Target, long Bytes, string? Note, bool IsSidecar);
+/// <param name="Image">The image on the card (null for sidecars), so its details can be cached for the copy.</param>
+public sealed record PlannedCopy(string Source, string Target, long Bytes, string? Note, bool IsSidecar, FsNode? Image = null);
 
 public sealed record ImportPlan(
     string CardName,
@@ -69,7 +70,7 @@ public static class ImportPlanner
                     name = FreeName(name, taken);
                 }
                 taken.Add(name);
-                copies.Add(new PlannedCopy(item.Image.FullPath, Path.Join(target, name), item.Image.Size, note, false));
+                copies.Add(new PlannedCopy(item.Image.FullPath, Path.Join(target, name), item.Image.Size, note, false, item.Image));
 
                 // Sidecars follow the image's (possibly new) name.
                 string oldBase = Path.GetFileNameWithoutExtension(item.Image.Name), newBase = Path.GetFileNameWithoutExtension(name);

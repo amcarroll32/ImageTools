@@ -7,7 +7,8 @@
         Width="980" Height="720" MinWidth="760" MinHeight="480"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource WindowBg}"
-        UseLayoutRounding="True">
+        UseLayoutRounding="True"
+        Closing="Window_Closing">
 
     <Window.Resources>
         <!-- A virtualizing list without selection: thousands of rows for a full card stay fast. -->
@@ -124,6 +125,25 @@
             <ItemsControl x:Name="ChangesList" Style="{StaticResource FlatList}" Padding="0,8,0,12" />
         </DockPanel>
 
+        <!-- Step 3: copying, then the results -->
+        <DockPanel x:Name="ProgressPanel" Grid.Row="1" Visibility="Collapsed">
+            <Border DockPanel.Dock="Top" Padding="16,12" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Hairline}">
+                <StackPanel>
+                    <TextBlock x:Name="ProgressText" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <Grid Height="6" Margin="0,8,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="ProgressDone" Width="0*" />
+                            <ColumnDefinition x:Name="ProgressLeft" Width="1*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.ColumnSpan="2" Background="{DynamicResource BarTrack}" CornerRadius="3" />
+                        <Border x:Name="ProgressFill" CornerRadius="3" Background="{DynamicResource AccentFill}" />
+                    </Grid>
+                    <TextBlock x:Name="ProgressDetail" FontSize="11" Foreground="{DynamicResource InkMuted}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Border>
+            <ItemsControl x:Name="ResultsList" Style="{StaticResource FlatList}" Padding="0,8,0,12" />
+        </DockPanel>
+
         <!-- Footer -->
         <Border Grid.Row="2" Padding="16,10" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Hairline}">
             <DockPanel>
@@ -135,9 +155,17 @@
                     <Button Content="Back" Padding="14,6" Margin="0,0,8,0" Click="Back_Click" />
                     <Button Content="Copy report" Padding="14,6" Margin="0,0,8,0" Click="CopyReport_Click"
                             ToolTip="Copy this list of changes to the clipboard" />
-                    <Button x:Name="ApplyButton" Content="Apply changes" Padding="14,6" IsEnabled="False"
+                    <Button x:Name="ApplyButton" Content="Apply changes" Padding="14,6" Click="Apply_Click"
                             ToolTipService.ShowOnDisabled="True"
-                            ToolTip="Copying isn't switched on yet: this beta only previews what an import would do." />
+                            ToolTip="Copies only: nothing on the card is changed or deleted, and nothing in the archive is overwritten. Every copy is checked against the original." />
+                </StackPanel>
+                <StackPanel x:Name="CopyingButtons" DockPanel.Dock="Right" Orientation="Horizontal" Visibility="Collapsed">
+                    <Button x:Name="StopButton" Content="Stop" Padding="14,6" Click="Stop_Click"
+                            ToolTip="Stop after the file being copied now. Files already copied stay where they are." />
+                </StackPanel>
+                <StackPanel x:Name="DoneButtons" DockPanel.Dock="Right" Orientation="Horizontal" Visibility="Collapsed">
+                    <Button x:Name="OpenLogButton" Content="Open log" Padding="14,6" Margin="0,0,8,0" Click="OpenLog_Click" />
+                    <Button Content="Close" Padding="14,6" IsDefault="True" Click="Close_Click" />
                 </StackPanel>
                 <TextBlock x:Name="FooterNote" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0"
                            Foreground="{DynamicResource InkMuted}" />

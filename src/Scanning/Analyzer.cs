@@ -16,7 +16,7 @@ namespace ImageTools.Scanning;
 /// </summary>
 public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
 {
-    private const int HeadBytes = 64 * 1024;
+    public const int HeadBytes = 64 * 1024;
     private const int MaxFoldersPerGroup = 40;
     private const int MaxMatches = 500;
 
@@ -214,7 +214,7 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
     private static SafeFileHandle Open(string path) =>
         File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.SequentialScan);
 
-    private static UInt128 ToHash(ReadOnlySpan<byte> sha256) => BinaryPrimitives.ReadUInt128LittleEndian(sha256);
+    public static UInt128 ToHash(ReadOnlySpan<byte> sha256) => BinaryPrimitives.ReadUInt128LittleEndian(sha256);
 
     private void HashHead(Item item)
     {

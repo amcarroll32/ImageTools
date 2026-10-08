@@ -994,8 +994,13 @@ public partial class MainWindow : Window
 
     private void ReviewImport_Click(object sender, RoutedEventArgs e)
     {
-        if (((FrameworkElement)sender).Tag is CardStatus status)
-            new ImportWindow(status) { Owner = this }.ShowDialog();
+        if (((FrameworkElement)sender).Tag is not CardStatus status)
+            return;
+        var cache = _cacheTask.IsCompletedSuccessfully ? _cacheTask.Result : null;
+        var window = new ImportWindow(status, cache) { Owner = this };
+        window.ShowDialog();
+        if (window.CopiedImages > 0)
+            ScanForNew(); // the copies are already in the cache, so this only lists folders
     }
 
     // ---- Navigation ----

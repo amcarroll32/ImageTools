@@ -58,14 +58,21 @@ public sealed record ChangeRow(string Glyph, Brush GlyphBrush, string Text, stri
 public partial class ImportWindow : Window
 {
     private readonly CardStatus _status;
+    private readonly HashCache? _cache;
     private readonly List<ImportRow> _rows = [];
     private ImportPlan? _plan;
     private bool _bulk;
+    private CancellationTokenSource? _copyCts;
+    private string? _logPath;
 
-    public ImportWindow(CardStatus status)
+    /// <summary>Images copied by this window, so the main window knows to look for them.</summary>
+    public int CopiedImages { get; private set; }
+
+    public ImportWindow(CardStatus status, HashCache? cache)
     {
         InitializeComponent();
         _status = status;
+        _cache = cache;
 
         var items = new List<object>();
         foreach (var folder in status.Folders.Where(f => f.Items.Count > 0))
@@ -205,6 +212,7 @@ public partial class ImportWindow : Window
         if (plan.Renamed > 0)
             AddSummary($"{Format.Count(plan.Renamed, "file gets", "files get")} a “ (2)” suffix because a different file with the same name " +
                        "is already there. Each is marked below and listed in the report.", Theme.AccentText);
+        bool enoughSpace = true;
         foreach (var (root, free) in plan.Space)
         {
             long need = plan.Copies.Where(c => c.Target.StartsWith(root, StringComparison.OrdinalIgnoreCase)).Sum(c => c.Bytes);
@@ -212,7 +220,10 @@ public partial class ImportWindow : Window
             if (free < 0)
                 AddSummary($"Couldn't check the free space on {drive}.", Theme.StatusWarning);
             else if (free < need)
+            {
                 AddSummary($"Not enough space on {drive}: {Format.Bytes(need)} needed, {Format.Bytes(free)} free.", Theme.StatusCritical);
+                enoughSpace = false;
+            }
             else
                 AddSummary($"{drive} has {Format.Bytes(free)} free; {Format.Bytes(free - need)} left afterwards.", Theme.SecondaryText);
         }
@@ -232,7 +243,140 @@ public partial class ImportWindow : Window
         SelectButtons.Visibility = Visibility.Collapsed;
         PreviewPanel.Visibility = Visibility.Visible;
         PreviewButtons.Visibility = Visibility.Visible;
-        FooterNote.Text = "Applying isn't switched on yet: this beta only previews. Copy report keeps this list.";
+        ApplyButton.Content = $"Apply – copy {Format.Count(plan.Copies.Count, "file", "files")}";
+        ApplyButton.IsEnabled = enoughSpace && plan.Copies.Count > 0;
+        FooterNote.Text = enoughSpace
+            ? "Each copy is checked against the original before it gets its final name. A log of every file is kept."
+            : "Free up space on the archive drive, or select fewer images, before applying.";
+    }
+
+    // ---- Step 3: apply ----
+
+    private async void Apply_Click(object sender, RoutedEventArgs e)
+    {
+        if (_plan is not { } plan)
+            return;
+
+        HeaderTitle.Text = $"Copying from camera card {plan.CardName}";
+        HeaderSubtitle.Text = "Copies only: nothing on the card is changed or deleted, and nothing in the archive is overwritten.";
+        PreviewPanel.Visibility = Visibility.Collapsed;
+        PreviewButtons.Visibility = Visibility.Collapsed;
+        ProgressPanel.Visibility = Visibility.Visible;
+        CopyingButtons.Visibility = Visibility.Visible;
+        FooterNote.Text = "";
+        var results = new System.Collections.ObjectModel.ObservableCollection<ChangeRow>();
+        ResultsList.ItemsSource = results;
+
+        _copyCts = new CancellationTokenSource();
+        var importer = new Importer(plan, _cache);
+        var progress = new Progress<ImportProgress>(p => ShowProgress(plan, p, results));
+        List<CopyResult> done;
+        try
+        {
+            done = await Task.Run(() => importer.Run(progress, _copyCts.Token));
+        }
+        catch (Exception ex)
+        {
+            done = [];
+            FooterNote.Text = $"Couldn't finish the import: {ex.Message}";
+        }
+        _logPath = importer.LogPath;
+        bool stopped = _copyCts.IsCancellationRequested;
+        _copyCts = null;
+        CopiedImages = done.Count(r => r.Outcome == CopyOutcome.Copied && !r.Copy.IsSidecar);
+        ShowFinished(plan, done, stopped);
+        _cache?.Save([]); // keep the copies' hashes; prune nothing (that's the scan's job)
+    }
+
+    private void ShowProgress(ImportPlan plan, ImportProgress p, ICollection<ChangeRow> results)
+    {
+        double fraction = plan.Bytes > 0 ? Math.Clamp((double)p.BytesDone / plan.Bytes, 0, 1) : 0;
+        ProgressDone.Width = new GridLength(fraction, GridUnitType.Star);
+        ProgressLeft.Width = new GridLength(1 - fraction, GridUnitType.Star);
+        ProgressText.Text = $"Copying {Format.Count(p.FilesDone + 1)} of {Format.Count(plan.Copies.Count, "file", "files")}…  " +
+                            $"{Format.Bytes(p.BytesDone)} of {Format.Bytes(plan.Bytes)}";
+        ProgressDetail.Text = p.Current;
+        if (p.Last is { } r)
+            results.Add(MakeResultRow(r));
+    }
+
+    private static ChangeRow MakeResultRow(CopyResult r) => r.Outcome switch
+    {
+        CopyOutcome.Copied => new ChangeRow("", Theme.StatusGood, $"{Path.GetFileName(r.Copy.Source)}  →  {r.Copy.Target}",
+            $"copied and verified  ·  {Format.Bytes(r.Copy.Bytes)}" + (r.Copy.IsSidecar ? "  ·  sidecar" : ""), r.Copy.Note),
+        CopyOutcome.Skipped => new ChangeRow("", Theme.StatusWarning, $"{Path.GetFileName(r.Copy.Source)}  →  {r.Copy.Target}",
+            "skipped", r.Reason),
+        _ => new ChangeRow("", Theme.StatusCritical, $"{Path.GetFileName(r.Copy.Source)}  →  {r.Copy.Target}",
+            "not copied", r.Reason),
+    };
+
+    private void ShowFinished(ImportPlan plan, List<CopyResult> results, bool stopped)
+    {
+        int copied = results.Count(r => r.Outcome == CopyOutcome.Copied);
+        int skipped = results.Count(r => r.Outcome == CopyOutcome.Skipped);
+        int failed = results.Count(r => r.Outcome == CopyOutcome.Failed);
+        int renamed = results.Count(r => r.Outcome == CopyOutcome.Copied && r.Copy.Note != null);
+        long bytes = results.Where(r => r.Outcome == CopyOutcome.Copied).Sum(r => r.Copy.Bytes);
+
+        HeaderTitle.Text = stopped ? "Import stopped" : failed + skipped > 0 ? "Import finished, with problems" : "Import finished";
+        HeaderSubtitle.Text = $"From camera card {plan.CardName}. Nothing on the card was changed or deleted, and nothing in the archive was overwritten.";
+        var parts = new List<string> { $"Copied {Format.Count(copied, "file", "files")} ({Format.Bytes(bytes)}), each checked against its original." };
+        if (renamed > 0)
+            parts.Add($"{Format.Count(renamed, "was", "were")} saved with a suffix because the name was taken.");
+        if (skipped > 0)
+            parts.Add($"{Format.Count(skipped, "file was", "files were")} skipped because something already had that name.");
+        if (failed > 0)
+            parts.Add($"{Format.Count(failed, "file", "files")} couldn't be copied – see below.");
+        if (stopped && results.Count < plan.Copies.Count)
+            parts.Add($"{Format.Count(plan.Copies.Count - results.Count, "file wasn't", "files weren't")} started.");
+        ProgressText.Text = string.Join(" ", parts);
+        ProgressDone.Width = new GridLength(1, GridUnitType.Star);
+        ProgressLeft.Width = new GridLength(0, GridUnitType.Star);
+        ProgressFill.Background = failed > 0 ? Theme.StatusCritical : skipped > 0 ? Theme.StatusWarning : Theme.StatusGood;
+        ProgressDetail.Text = _logPath != null ? $"Log: {_logPath}" : "The log couldn't be written.";
+
+        // Problems first, so they aren't lost among hundreds of successful copies.
+        ResultsList.ItemsSource = results
+            .OrderBy(r => r.Outcome switch { CopyOutcome.Failed => 0, CopyOutcome.Skipped => 1, _ => 2 })
+            .Select(MakeResultRow)
+            .ToList();
+
+        CopyingButtons.Visibility = Visibility.Collapsed;
+        DoneButtons.Visibility = Visibility.Visible;
+        OpenLogButton.IsEnabled = _logPath != null;
+        FooterNote.Text = copied > 0 ? "The map is updated with a Scan for new when you close this window." : "";
+    }
+
+    private void Stop_Click(object sender, RoutedEventArgs e)
+    {
+        _copyCts?.Cancel();
+        StopButton.IsEnabled = false;
+        FooterNote.Text = "Stopping… the file being copied now is abandoned and its unfinished copy removed.";
+    }
+
+    private void OpenLog_Click(object sender, RoutedEventArgs e)
+    {
+        if (_logPath == null)
+            return;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(_logPath) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            FooterNote.Text = $"Couldn't open the log: {ex.Message}";
+        }
+    }
+
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>Closing mid-copy stops after the current file instead of leaving it half done.</summary>
+    private void Window_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_copyCts == null)
+            return;
+        e.Cancel = true;
+        Stop_Click(this, new RoutedEventArgs());
     }
 
     private void AddSummary(string text, Brush brush) =>
