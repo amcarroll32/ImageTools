@@ -1,0 +1,19 @@
+# Build output
+bin/
+obj/
+publish/
+
+# IDE / user files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# WPF temporary project files left by interrupted builds
+*_wpftmp.csproj
+
+# Local app data (if run from the repo folder)
+ImageTools.cache
+ImageTools.cache.tmp
+ImageTools.settings.json
