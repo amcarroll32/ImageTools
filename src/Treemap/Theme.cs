@@ -65,6 +65,13 @@ public static class Theme
     public static Brush DriveBorder { get; private set; } = null!;
     public static Brush DriveHeaderFill { get; private set; } = null!;
 
+    /// <summary>
+    /// A memory card that's the source of archived images: frame in the Camera color (categorical
+    /// slot 1), title band and paired-folder strips in the accent-tinted badge background.
+    /// </summary>
+    public static Brush SourceFrame { get; private set; } = null!;
+    public static Brush SourceBand { get; private set; } = null!;
+
     /// <summary>Images with no copy elsewhere.</summary>
     public static Brush UniqueFill { get; private set; } = null!;
     public static Brush UniqueSwatch { get; private set; } = null!;
@@ -139,6 +146,8 @@ public static class Theme
             FolderBorder = Solid(0x3d3d3a);
             DriveBorder = Solid(0x6b6a65);
             DriveHeaderFill = Solid(0x2f2f2c);
+            SourceFrame = Solid(0x3987e5);
+            SourceBand = Solid(0x1f2d40);
             UniqueFill = Cushion(Rgb(0x5e5d58));
             UniqueSwatch = Solid(0x5e5d58);
             PendingFill = Solid(0x3b3b37);
@@ -183,6 +192,8 @@ public static class Theme
             FolderBorder = Solid(0xc9c8c0);
             DriveBorder = Solid(0x8f8e87);
             DriveHeaderFill = Solid(0xe3e2dc);
+            SourceFrame = Solid(0x2a78d6);
+            SourceBand = Solid(0xe1ecfb);
             UniqueFill = Cushion(Rgb(0xb4b3ac));
             UniqueSwatch = Solid(0xb4b3ac);
             PendingFill = Solid(0xdcdbd4);

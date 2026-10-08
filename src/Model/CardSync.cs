@@ -35,8 +35,12 @@ public sealed record CardFolder(
 }
 
 /// <param name="Unmatched">Camera folders on the card with no archive folder found.</param>
-public sealed record CardStatus(FsNode Card, List<CardFolder> Folders, List<FsNode> Unmatched)
+/// <param name="Recognized">This card (by volume serial) was paired on an earlier scan.</param>
+public sealed record CardStatus(FsNode Card, List<CardFolder> Folders, List<FsNode> Unmatched, bool Recognized)
 {
+    /// <summary>At least one camera folder is paired with an archive: the card is where those photos came from.</summary>
+    public bool IsSource => Folders.Count > 0;
+
     public IEnumerable<ImportItem> NewItems => Folders.SelectMany(f => f.Items).Where(i => i.Bucket == ImportBucket.New);
     public int NewCount => NewItems.Count();
     public long NewBytes => NewItems.Sum(i => i.Image.Size);
@@ -58,8 +62,14 @@ public static class CardSync
     public static IEnumerable<FsNode> Images(FsNode folder) =>
         (folder.Children ?? []).Where(c => c.Kind == NodeKind.File && !c.IsAsset && c.Dup is DupStatus.Unique or DupStatus.Duplicate);
 
+    /// <summary>
+    /// Identifies a card: its volume serial plus its capacity, because cameras often format cards with
+    /// a fixed placeholder serial (such as 01234567) that two cards from the same camera would share.
+    /// </summary>
+    public static string CardId(FsNode card) => $"{card.VolumeSerial:X8}-{Math.Round(card.Capacity / 1e9)}GB";
+
     public static string Key(FsNode card, FsNode folder) =>
-        $"{card.VolumeSerial:X8}|{Path.GetRelativePath(card.Name, folder.FullPath)}";
+        $"{CardId(card)}|{Path.GetRelativePath(card.Name, folder.FullPath)}";
 
     /// <summary>
     /// Status of every memory card among <paramref name="drives"/>. Confident matches are added to
@@ -75,6 +85,8 @@ public static class CardSync
             if (folders.Count == 0)
                 continue;
 
+            string prefix = $"{CardId(card)}|";
+            bool recognized = card.VolumeSerial != 0 && remembered.Keys.Any(k => k.StartsWith(prefix, StringComparison.Ordinal));
             var archives = new Dictionary<FsNode, (FsNode? Archive, string Path, ArchiveSource Source)>();
 
             // 1. A folder that holds at least half of the card folder's images (or shares its name).
@@ -119,7 +131,7 @@ public static class CardSync
             var planned = folders.Where(archives.ContainsKey)
                 .Select(f => BuildFolder(f, archives[f].Archive, archives[f].Path, archives[f].Source))
                 .ToList();
-            result.Add(new CardStatus(card, planned, folders.Where(f => !archives.ContainsKey(f)).ToList()));
+            result.Add(new CardStatus(card, planned, folders.Where(f => !archives.ContainsKey(f)).ToList(), recognized));
         }
         return result;
     }

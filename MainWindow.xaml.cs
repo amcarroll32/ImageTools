@@ -47,6 +47,9 @@ public partial class MainWindow : Window
     private Analyzer? _analyzer;
     private DupResult? _dups;
     private List<CardStatus> _cardStatus = [];
+
+    /// <summary>Card folders and archive folders whose header notes the pairing; cleared before each update.</summary>
+    private readonly List<FsNode> _pairedFolders = [];
     private FsNode? _tipNode;
     private Point _tipPoint;
     private int _tick;
@@ -482,10 +485,11 @@ public partial class MainWindow : Window
     /// previous scan of a drive to the new one, for every image whose size and date haven't changed,
     /// so the map keeps its colors until the duplicate check has looked again.
     /// </summary>
-    private static void CarryOver(FsNode from, FsNode to)
+    private void CarryOver(FsNode from, FsNode to)
     {
         to.ImportBadge = from.ImportBadge;
         to.ImportBadgeGood = from.ImportBadgeGood;
+        to.IsSourceCard = from.IsSourceCard;
         var stack = new Stack<(FsNode From, FsNode To)>();
         stack.Push((from, to));
         while (stack.Count > 0)
@@ -493,6 +497,9 @@ public partial class MainWindow : Window
             var (a, b) = stack.Pop();
             b.DupCount = a.DupCount;
             b.DupBytes = a.DupBytes;
+            b.PairNote = a.PairNote;
+            if (b.PairNote != null)
+                _pairedFolders.Add(b);
             if (a.Children == null || b.Children == null)
                 continue;
             var old = new Dictionary<string, FsNode>(a.Children.Count, StringComparer.OrdinalIgnoreCase);
@@ -908,7 +915,10 @@ public partial class MainWindow : Window
             return;
         }
         foreach (var d in pc.Children!)
-            d.ImportBadge = null;
+            (d.ImportBadge, d.IsSourceCard) = (null, false);
+        foreach (var f in _pairedFolders)
+            f.PairNote = null;
+        _pairedFolders.Clear();
 
         _cardStatus = CardSync.Find(ViewRoots(pc), App.Settings.CardArchives, out bool remembered);
         if (remembered)
@@ -916,6 +926,20 @@ public partial class MainWindow : Window
 
         foreach (var s in _cardStatus)
         {
+            // Mark the source card and both ends of each pairing, so the link shows from either side.
+            s.Card.IsSourceCard = s.IsSource;
+            foreach (var f in s.Folders)
+            {
+                bool exists = f.Archive != null || Directory.Exists(f.ArchivePath);
+                f.Folder.PairNote = exists ? $"archived in {Format.ShortPath(f.ArchivePath)}" : $"goes to {Format.ShortPath(f.ArchivePath)} (new folder)";
+                _pairedFolders.Add(f.Folder);
+                if (f.Archive != null)
+                {
+                    f.Archive.PairNote = $"archive of card {s.Card.DisplayName}";
+                    _pairedFolders.Add(f.Archive);
+                }
+            }
+
             if (s.NewCount > 0)
                 (s.Card.ImportBadge, s.Card.ImportBadgeGood) = ($"{Format.Count(s.NewCount)} new to import", false);
             else if (s.UpToDate)
@@ -934,6 +958,7 @@ public partial class MainWindow : Window
     private static ImportBanner MakeImportBanner(CardStatus s)
     {
         string title = $"Camera card {s.Card.DisplayName}";
+        string seen = s.Recognized ? "Recognized from an earlier scan. " : "";
         var targets = s.Folders.Where(f => f.Count(ImportBucket.New) > 0).Select(f => Format.ShortPath(f.ArchivePath)).ToList();
         string where = targets.Count switch
         {
@@ -953,14 +978,14 @@ public partial class MainWindow : Window
             long first = s.NewItems.Min(i => i.Image.DateTicks), last = s.NewItems.Max(i => i.Image.DateTicks);
             string taken = Format.Date(first) == Format.Date(last) ? Format.Date(first) : $"{Format.Date(first)} – {Format.Date(last)}";
             return new ImportBanner(s, title, Format.Bytes(s.NewBytes), "", Format.Count(s.NewCount, "new image", "new images"), Theme.AccentText,
-                $"Taken {taken}. Not yet in {where}.{others}{unmatched}", Visibility.Visible);
+                $"{seen}Taken {taken}. Not yet in {where}.{others}{unmatched}", Visibility.Visible);
         }
         if (s.OtherCount > 0)
             return new ImportBanner(s, title, "", "", "No new images", Theme.StatusGood,
-                $"Nothing newer than the archive.{others} Review to sync the whole card.{unmatched}", Visibility.Visible);
+                $"{seen}Nothing newer than the archive.{others} Review to sync the whole card.{unmatched}", Visibility.Visible);
         if (s.UpToDate)
             return new ImportBanner(s, title, "", "", "Archived", Theme.StatusGood,
-                $"Every image on the card is already in {string.Join(", ", s.Folders.Select(f => Format.ShortPath(f.ArchivePath)).Distinct())}.",
+                $"{seen}Every image on the card is already in {string.Join(", ", s.Folders.Select(f => Format.ShortPath(f.ArchivePath)).Distinct())}.",
                 Visibility.Collapsed);
         return new ImportBanner(s, title, "", "", "No archive folder found", Theme.MutedText,
             $"{Format.Count(s.UnmatchedImages, "image", "images")} on the card aren't in any archive folder. Import them once by hand and " +
@@ -1085,9 +1110,13 @@ public partial class MainWindow : Window
         string HealthText = "",
         Visibility AlertVisibility = Visibility.Collapsed,
         string Detail2 = "",
-        Visibility Detail2Visibility = Visibility.Collapsed)
+        Visibility Detail2Visibility = Visibility.Collapsed,
+        Brush? GlyphBrush = null)
     {
         public string AlertGlyph => Theme.AlertGlyph;
+
+        /// <summary>Drive icon color: the accent for a source camera card, ink otherwise.</summary>
+        public Brush GlyphInk => GlyphBrush ?? Theme.PrimaryText;
     }
 
     private sealed record LegendItem(string Name, Brush Swatch, string SizeText, string PercentText);
@@ -1146,8 +1175,10 @@ public partial class MainWindow : Window
             healthBrush != null ? Visibility.Visible : Visibility.Collapsed,
             hw?.HealthLabel ?? "",
             health is DiskHealth.Warning or DiskHealth.Unhealthy ? Visibility.Visible : Visibility.Collapsed,
-            hw == null ? "" : contentOnly ? hw.DiskLine : $"{hw.HealthLabel}  ·  {hw.DiskLine}",
-            hw != null ? Visibility.Visible : Visibility.Collapsed);
+            (drive.IsSourceCard ? "Camera card: the original source of photos archived on this PC" + (hw != null ? "  ·  " : "") : "")
+                + (hw == null ? "" : contentOnly ? hw.DiskLine : $"{hw.HealthLabel}  ·  {hw.DiskLine}"),
+            hw != null || drive.IsSourceCard ? Visibility.Visible : Visibility.Collapsed,
+            drive.IsSourceCard ? Theme.AccentText : null);
     }
 
     /// <summary>A muted row for a drive that isn't scanned, saying why and how to include it.</summary>
@@ -1269,15 +1300,20 @@ public partial class MainWindow : Window
             case NodeKind.Root:
                 return $"{images}  ·  across {Format.Count(node.Children!.Count, "drive", "drives")}{dups}{hidden}";
             case NodeKind.Drive:
-                return images + dups + hidden + DeniedSuffix(node) + (node.Hardware is { } hw ? $"\n{hw.HealthLabel}  ·  {hw.DiskLine}" : "");
+                return images + dups + hidden + DeniedSuffix(node)
+                       + (node.IsSourceCard ? "\nCamera card: the original source of photos archived on this PC" : "")
+                       + (node.Hardware is { } hw ? $"\n{hw.HealthLabel}  ·  {hw.DiskLine}" : "");
             default:
                 if (node.AccessDenied)
                     return "Access denied – this folder couldn't be read.";
                 string library = node.Library != Library.Other ? $"\nLibrary: {Classifier.DisplayName(node.Library)}" : "";
                 string asset = node.EffectiveAssetReason is { } reason ? $"\nApp assets: {reason}" : "";
-                return images + dups + hidden + library + asset + DeniedSuffix(node);
+                string pair = node.PairNote != null ? $"\n{Capitalize(node.PairNote)}" : "";
+                return images + dups + hidden + pair + library + asset + DeniedSuffix(node);
         }
     }
+
+    private static string Capitalize(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
 
     private static string DeniedSuffix(FsNode node) =>
         node.DeniedCount > 0 ? $"\n{Format.Count(node.DeniedCount, "folder", "folders")} inside couldn't be read" : "";
@@ -1291,7 +1327,8 @@ public partial class MainWindow : Window
         {
             if (node.AccessDenied)
                 return "access denied";
-            return Format.Count(node.VisibleCount(ShowAssets), "image", "images") + DupSuffix(node);
+            return Format.Count(node.VisibleCount(ShowAssets), "image", "images") + DupSuffix(node)
+                   + (node.PairNote != null ? $"  ·  {node.PairNote}" : "");
         }
         if (node.IsAsset)
             return "app asset";
@@ -1776,6 +1813,10 @@ public partial class MainWindow : Window
         string text = $"{Format.Count(node.VisibleCount(ShowAssets), "image", "images")}  ·  {Format.Count(node.DirCount, "folder", "folders")}";
         if (node.DupCount > 0)
             text += $"\n{Format.Count(node.DupCount)} with copies elsewhere ({Format.Bytes(node.DupBytes)})";
+        if (node.PairNote != null)
+            text += $"\n{Capitalize(node.PairNote)}";
+        if (node.IsSourceCard)
+            text += "\nCamera card: the original source of photos archived on this PC";
         if (node.Kind == NodeKind.Directory && node.Library != Library.Other)
             text += $"\nLibrary: {Classifier.DisplayName(node.Library)}";
         if (node.EffectiveAssetReason is { } reason && node.Kind == NodeKind.Directory)

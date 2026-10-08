@@ -321,7 +321,7 @@ public sealed class TreemapControl : FrameworkElement
         if (_root!.Kind != NodeKind.Drive || bounds.Height < 120)
             return Inset(bounds, 2);
         var band = new Rect(bounds.X, bounds.Y, bounds.Width, DriveHeaderHeight + 2);
-        dc.DrawRectangle(Theme.DriveBorder, null, new Rect(band.X, band.Bottom - 1, band.Width, 1));
+        dc.DrawRectangle(_root!.IsSourceCard ? Theme.SourceFrame : Theme.DriveBorder, null, new Rect(band.X, band.Bottom - 1, band.Width, 1));
         double bottom = DrawDriveHeader(dc, _root, band, dim: false);
         return new Rect(bounds.X + 2, bottom + 4, bounds.Width - 4, Math.Max(0, bounds.Bottom - bottom - 6));
     }
@@ -487,7 +487,8 @@ public sealed class TreemapControl : FrameworkElement
     private void DrawDrive(DrawingContext dc, LayoutItem item, Rect r, int depth, bool lit)
     {
         var node = item.Node;
-        dc.DrawRectangle(Theme.DriveBorder, null, r);
+        // A camera card that's the source of archived images gets the Camera color for its frame.
+        dc.DrawRectangle(node.IsSourceCard ? Theme.SourceFrame : Theme.DriveBorder, null, r);
         var inner = Inset(r, 2);
         if (inner.IsEmpty)
             return;
@@ -513,7 +514,7 @@ public sealed class TreemapControl : FrameworkElement
     /// <summary>Draws the drive title band into <paramref name="band"/> and returns its bottom edge.</summary>
     private double DrawDriveHeader(DrawingContext dc, FsNode node, Rect band, bool dim)
     {
-        dc.DrawRectangle(Theme.DriveHeaderFill, null, band);
+        dc.DrawRectangle(node.IsSourceCard ? Theme.SourceBand : Theme.DriveHeaderFill, null, band);
         _labelBudget--;
 
         // Health strip down the left edge: green, yellow or red (none when the disk doesn't report health).
@@ -524,7 +525,7 @@ public sealed class TreemapControl : FrameworkElement
 
         var ink = dim ? Theme.MutedText : Theme.PrimaryText;
         double x = band.X + 11;
-        dc.DrawText(MakeIcon(Theme.DriveGlyph(node), 15, ink), new Point(x, band.Y + 5));
+        dc.DrawText(MakeIcon(Theme.DriveGlyph(node), 15, node.IsSourceCard && !dim ? Theme.AccentText : ink), new Point(x, band.Y + 5));
         x += 23;
 
         long capacity = node.Capacity;
@@ -658,9 +659,17 @@ public sealed class TreemapControl : FrameworkElement
 
         string name = node.DisplayName;
         string size = Format.Bytes(DisplaySize(node));
-        var text = MakeText(name + "  " + size, dim ? Theme.MutedText : Theme.PrimaryText, 11, false, r.Width - 8);
+
+        // A camera folder on a source card, or its archive: tinted strip and a note naming the other side.
+        string note = node.PairNote != null && !dim ? $"  ·  {node.PairNote}" : "";
+        if (note.Length > 0)
+            dc.DrawRectangle(Theme.SourceBand, null, new Rect(r.X + Px, r.Y + Px, Math.Max(0, r.Width - 2 * Px), HeaderHeight - Px));
+
+        var text = MakeText(name + "  " + size + note, dim ? Theme.MutedText : Theme.PrimaryText, 11, false, r.Width - 8);
         text.SetFontWeight(FontWeights.SemiBold, 0, name.Length);
         text.SetForegroundBrush(Theme.MutedText, name.Length, size.Length + 2);
+        if (note.Length > 0)
+            text.SetForegroundBrush(Theme.AccentText, name.Length + size.Length + 2, note.Length);
         dc.DrawText(text, new Point(r.X + 4, r.Y + 1));
     }
 

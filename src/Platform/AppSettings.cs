@@ -27,7 +27,7 @@ public sealed class AppSettings
 
     /// <summary>
     /// Camera card folder → archive folder pairings found on earlier scans, keyed by
-    /// "volume serial|folder path on the card" (e.g. "1A2B3C4D|DCIM\100CANON").
+    /// "volume serial-capacity|folder path on the card" (e.g. "01234567-62GB|DCIM\100CANON").
     /// </summary>
     public Dictionary<string, string> CardArchives { get; set; } = [];
 

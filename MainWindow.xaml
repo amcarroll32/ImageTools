@@ -85,7 +85,7 @@
                     <Border Width="11" Height="11" CornerRadius="2" Visibility="{Binding SwatchVisibility}"
                             Background="{Binding SwatchFill}" BorderBrush="{Binding SwatchStroke}" BorderThickness="{Binding SwatchThickness}" />
                     <TextBlock Text="{Binding Glyph}" Visibility="{Binding GlyphVisibility}" FontFamily="{StaticResource Icons}"
-                               FontSize="15" Foreground="{DynamicResource InkPrimary}" />
+                               FontSize="15" Foreground="{Binding GlyphInk}" />
                 </Grid>
                 <DockPanel Grid.Column="2">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Visibility="{Binding AlertVisibility}" Margin="8,0,0,0">

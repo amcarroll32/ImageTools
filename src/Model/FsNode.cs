@@ -105,6 +105,15 @@ public sealed class FsNode
     /// <summary>Volume serial number (removable drives only), so a camera card is recognized next time.</summary>
     public uint VolumeSerial { get; set; }
 
+    /// <summary>A memory card whose camera folders are paired with archive folders on the PC: the photos' original source.</summary>
+    public bool IsSourceCard { get; set; }
+
+    /// <summary>
+    /// Folders on either side of a card pairing, e.g. "archived in E:\…\Card2\100CANON" on the card
+    /// and "archive of card I:" on the PC; shown in the folder's header.
+    /// </summary>
+    public string? PairNote { get; set; }
+
     /// <summary>Camera cards: "33 new to import" or "Archived"; drawn in the drive's title band.</summary>
     public string? ImportBadge { get; set; }
     public bool ImportBadgeGood { get; set; }
