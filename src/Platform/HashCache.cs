@@ -22,6 +22,7 @@ public sealed class HashCache
     private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _saveLock = new();
     private volatile bool _dirty;
+    private int _run;
 
     public sealed class Entry(long size, long modified)
     {
@@ -35,21 +36,38 @@ public sealed class HashCache
 
         /// <summary>Looked up during this session, so it still describes a file that exists.</summary>
         public bool Seen { get; set; }
+
+        /// <summary>The check (see <see cref="BeginRun"/>) that first saw the file as it is now; 0 = loaded from disk.</summary>
+        public int CreatedInRun { get; set; }
     }
 
     public int Count => _entries.Count;
+
+    /// <summary>Starts a new duplicate check; entries created from now on are counted as new or changed files.</summary>
+    public int BeginRun() => Interlocked.Increment(ref _run);
 
     /// <summary>The entry for a file as it is now; a stale entry (size or date changed) is replaced.</summary>
     public Entry Get(string path, long size, long modified)
     {
         if (!_entries.TryGetValue(path, out var entry) || entry.Size != size || entry.Modified != modified)
         {
-            entry = new Entry(size, modified);
+            entry = new Entry(size, modified) { CreatedInRun = _run };
             _entries[path] = entry;
             _dirty = true;
         }
         entry.Seen = true;
         return entry;
+    }
+
+    /// <summary>The cached entry for a file if it's still current, without marking it as seen.</summary>
+    public Entry? Peek(string path, long size, long modified) =>
+        _entries.TryGetValue(path, out var entry) && entry.Size == size && entry.Modified == modified ? entry : null;
+
+    /// <summary>Forgets every hash and photo detail, so the next check reads everything again.</summary>
+    public void Clear()
+    {
+        _entries.Clear();
+        _dirty = true;
     }
 
     public void MarkDirty() => _dirty = true;

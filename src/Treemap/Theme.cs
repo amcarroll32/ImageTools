@@ -239,7 +239,8 @@ public static class Theme
         Slot,      // categorical slot in Value
         Age,       // age bucket in Value (-1 unknown)
         Unique,
-        Pending,
+        Pending,     // not checked yet
+        Unreadable,  // couldn't be opened to compare
         Asset,
         Online,
     }
@@ -258,6 +259,7 @@ public static class Theme
             {
                 DupStatus.Duplicate => (Key.Slot, 0),
                 DupStatus.Unique => (Key.Unique, 0),
+                DupStatus.Unreadable => (Key.Unreadable, 0),
                 _ => (Key.Pending, 0),
             },
             ColorMode.Library => (Key.Slot, (int)file.Library),
@@ -277,7 +279,7 @@ public static class Theme
             Key.Unique => UniqueFill,
             Key.Pending => PendingFill,
             Key.Asset => AssetFill,
-            _ => OnlineFill,
+            _ => OnlineFill, // online-only and unreadable: both there, but not read
         };
     }
 
@@ -303,7 +305,7 @@ public static class Theme
         Key.Unique => UniqueSwatch,
         Key.Pending => PendingSwatch,
         Key.Asset => AssetSwatch,
-        _ => OnlineSwatch,
+        _ => OnlineSwatch, // online-only and unreadable
     };
 
     public static Brush Swatch(FsNode node, ColorMode mode, long nowTicks)

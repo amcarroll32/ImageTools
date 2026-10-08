@@ -22,6 +22,10 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _progressTimer;
     private readonly DispatcherTimer _searchTimer;
     private readonly DispatcherTimer _thumbTimer;
+    private readonly DispatcherTimer _deviceTimer;
+
+    /// <summary>Drives being listed again by Scan for new; the map keeps showing the previous scan meanwhile.</summary>
+    private readonly List<DriveScanner> _refreshing = [];
     private readonly bool _ready;
     private readonly Task<HashCache> _cacheTask = Task.Run(HashCache.Load);
     private CancellationTokenSource? _cts;
@@ -99,6 +103,9 @@ public partial class MainWindow : Window
         _searchTimer.Stop();
         _thumbTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(120), DispatcherPriority.Input, (_, _) => LoadTipThumbnail(), Dispatcher);
         _thumbTimer.Stop();
+        // Plugging in a card fires several notifications; act once they've settled.
+        _deviceTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(1500), DispatcherPriority.Background, (_, _) => DeviceSettled(), Dispatcher);
+        _deviceTimer.Stop();
 
         Loaded += (_, _) => StartScan();
         Closed += Window_Closed;
@@ -125,6 +132,7 @@ public partial class MainWindow : Window
         var pc = new FsNode("This PC", NodeKind.Root, null) { Children = [] };
         _pc = pc;
         _scanners = [];
+        _refreshing.Clear();
         _probing.Clear();
         foreach (var old in _entries)
             old.Cts?.Cancel();
@@ -227,7 +235,8 @@ public partial class MainWindow : Window
             _activeBatches--;
         }
 
-        if (_activeBatches == 0)
+        // A Scan for new still re-listing drives starts the check itself once it's done.
+        if (_activeBatches == 0 && _refreshing.Count == 0)
         {
             _elapsed.Stop();
             StartAnalysis();
@@ -237,6 +246,42 @@ public partial class MainWindow : Window
 
     private sealed record DriveProbe(string Name, string Label, long TotalSize, long FreeSize, bool IsRemovable, bool HasDcim, string? Format, uint Serial);
 
+    /// <summary>Asks Windows about a drive; slow for unready drives, so call it off the UI thread. Null when not ready.</summary>
+    private static DriveProbe? Probe(DriveInfo drive)
+    {
+        try
+        {
+            return drive.IsReady
+                ? new DriveProbe(drive.Name, drive.VolumeLabel, drive.TotalSize, drive.TotalFreeSpace, drive.DriveType == DriveType.Removable,
+                    drive.DriveType == DriveType.Removable && Directory.Exists(Path.Join(drive.Name, "DCIM")), drive.DriveFormat,
+                    drive.DriveType == DriveType.Removable ? VolumeInfo.Serial(drive.Name) : 0)
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null; // vanished or locked (e.g. BitLocker)
+        }
+    }
+
+    private FsNode NewDriveNode(DriveProbe probe, DriveEntry entry, FsNode pc)
+    {
+        bool local = entry.Source == DriveSource.Local;
+        var node = new FsNode(probe.Name, NodeKind.Drive, pc)
+        {
+            Label = probe.Label,
+            PendingSize = local ? probe.TotalSize - probe.FreeSize : 0,
+            Capacity = local ? probe.TotalSize : 0,
+            IsRemovable = probe.IsRemovable,
+            HasDcimFolder = probe.HasDcim,
+            VolumeSerial = probe.Serial,
+            FreeSize = local ? probe.FreeSize : 0,
+            IsScanning = true,
+            Source = entry.Source,
+        };
+        ApplyHardware(node, entry);
+        return node;
+    }
+
     /// <summary>
     /// Checks a drive on a background thread (an unready drive can take 20+ seconds to say so),
     /// then adds it to the overview and scans it. Drives appear as soon as they respond.
@@ -244,21 +289,7 @@ public partial class MainWindow : Window
     private async Task ProbeAndScan(DriveEntry entry, FsNode pc, CancellationToken ct)
     {
         var drive = entry.Info;
-        var probe = await Task.Run(() =>
-        {
-            try
-            {
-                return drive.IsReady
-                    ? new DriveProbe(drive.Name, drive.VolumeLabel, drive.TotalSize, drive.TotalFreeSpace, drive.DriveType == DriveType.Removable,
-                        drive.DriveType == DriveType.Removable && Directory.Exists(Path.Join(drive.Name, "DCIM")), drive.DriveFormat,
-                        drive.DriveType == DriveType.Removable ? VolumeInfo.Serial(drive.Name) : 0)
-                    : null;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                return null; // vanished or locked (e.g. BitLocker)
-            }
-        });
+        var probe = await Task.Run(() => Probe(drive));
 
         if (pc != _pc)
             return;
@@ -290,22 +321,9 @@ public partial class MainWindow : Window
             }
         }
 
-        bool local = entry.Source == DriveSource.Local;
-        var node = new FsNode(probe.Name, NodeKind.Drive, pc)
-        {
-            Label = probe.Label,
-            PendingSize = local ? probe.TotalSize - probe.FreeSize : 0,
-            Capacity = local ? probe.TotalSize : 0,
-            IsRemovable = probe.IsRemovable,
-            HasDcimFolder = probe.HasDcim,
-            VolumeSerial = probe.Serial,
-            FreeSize = local ? probe.FreeSize : 0,
-            IsScanning = true,
-            Source = entry.Source,
-        };
+        var node = NewDriveNode(probe, entry, pc);
         entry.Node = node;
         pc.Children!.Add(node);
-        ApplyHardware(node, entry);
         var scanner = new DriveScanner(node, probe.TotalSize, probe.FreeSize);
         _scanners.Add(scanner);
         RecomputeRoot(pc);
@@ -341,6 +359,321 @@ public partial class MainWindow : Window
         RefreshSidePanel();
         RefreshSearch();
         UpdateStatus();
+    }
+
+    // ---- Scan for new ----
+
+    /// <summary>
+    /// Picks up drives that appeared or vanished (a card plugged in or pulled out), then lists every
+    /// scanned drive again in the background and swaps each in when it's done, so the map stays usable.
+    /// The duplicate check that follows only reads new or changed images; the rest comes from the cache.
+    /// </summary>
+    private async void ScanForNew()
+    {
+        var pc = _pc;
+        if (pc == null || _cts == null)
+            return;
+        if (_refreshing.Count > 0)
+            return; // already looking
+        if (_scanners.Count == 0 && _activeBatches == 0)
+        {
+            StartScan();
+            return;
+        }
+        if (_activeBatches > 0)
+        {
+            StatusText.Text = "Still scanning – Scan for new will be ready once it finishes.";
+            return;
+        }
+
+        var ct = _cts.Token;
+        _elapsed = Stopwatch.StartNew();
+        _progressTimer.Start();
+        await RefreshDriveList();
+        if (ct.IsCancellationRequested || pc != _pc)
+            return;
+
+        var jobs = _scanners
+            .Where(s => !s.Drive.IsScanning && s.Drive.ScanError == null)
+            .ToList()
+            .Select(s => RescanInPlace(s, pc, ct))
+            .ToList();
+        UpdateStatus();
+        await Task.WhenAll(jobs);
+        if (ct.IsCancellationRequested || pc != _pc)
+            return;
+
+        _lastScanFinished = _elapsed.Elapsed;
+        if (_activeBatches == 0)
+        {
+            _elapsed.Stop();
+            StartAnalysis();
+        }
+        UpdateStatus();
+    }
+
+    /// <summary>Lists a drive again without touching what's on screen, then swaps the new tree in.</summary>
+    private async Task RescanInPlace(DriveScanner old, FsNode pc, CancellationToken ct)
+    {
+        var oldNode = old.Drive;
+        var entry = _entries.FirstOrDefault(e => e.Node == oldNode);
+        if (entry == null)
+            return;
+        var probe = await Task.Run(() => Probe(entry.Info));
+        if (ct.IsCancellationRequested || pc != _pc || entry.Node != oldNode)
+            return;
+        if (probe == null)
+        {
+            RemoveDrive(entry, pc); // the card was pulled out
+            return;
+        }
+
+        var node = NewDriveNode(probe, entry, pc);
+        var scanner = new DriveScanner(node, probe.TotalSize, probe.FreeSize);
+        _refreshing.Add(scanner);
+        try
+        {
+            await scanner.ScanAsync(entry.Cts?.Token ?? ct);
+            scanner.Finish();
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Couldn't scan {oldNode.DisplayName} again: {ex.Message}. Showing the previous scan.";
+            return;
+        }
+        finally
+        {
+            _refreshing.Remove(scanner);
+        }
+        if (ct.IsCancellationRequested || pc != _pc || entry.Node != oldNode)
+            return;
+
+        int i = pc.Children!.IndexOf(oldNode);
+        int s = _scanners.IndexOf(old);
+        if (i < 0 || s < 0)
+            return;
+        CarryOver(oldNode, node);
+        pc.Children[i] = node;
+        _scanners[s] = scanner;
+        entry.Node = node;
+        RecomputeRoot(pc);
+
+        // Stay where you were: the same folder in the new tree, or the nearest one that still exists.
+        if (_current != null && (_current == oldNode || oldNode.IsAncestorOf(_current)))
+        {
+            FsNode? same = null;
+            for (var n = _current; n != null && same == null; n = n.Parent)
+                same = n == oldNode ? node : CardSync.FindByPath([node], n.FullPath);
+            NavigateTo(same ?? node);
+        }
+        else
+        {
+            Map.Invalidate();
+            RefreshSidePanel();
+        }
+    }
+
+    /// <summary>
+    /// Copies what's already known (duplicate status, copies, photo details, folder totals) from the
+    /// previous scan of a drive to the new one, for every image whose size and date haven't changed,
+    /// so the map keeps its colors until the duplicate check has looked again.
+    /// </summary>
+    private static void CarryOver(FsNode from, FsNode to)
+    {
+        to.ImportBadge = from.ImportBadge;
+        to.ImportBadgeGood = from.ImportBadgeGood;
+        var stack = new Stack<(FsNode From, FsNode To)>();
+        stack.Push((from, to));
+        while (stack.Count > 0)
+        {
+            var (a, b) = stack.Pop();
+            b.DupCount = a.DupCount;
+            b.DupBytes = a.DupBytes;
+            if (a.Children == null || b.Children == null)
+                continue;
+            var old = new Dictionary<string, FsNode>(a.Children.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var c in a.Children)
+                old.TryAdd(c.Name, c);
+            foreach (var c in b.Children)
+            {
+                if (!old.TryGetValue(c.Name, out var was) || was.Kind != c.Kind)
+                    continue;
+                if (c.Kind == NodeKind.Directory)
+                    stack.Push((was, c));
+                else if (was.Size == c.Size && was.LastWrite == c.LastWrite)
+                    (c.Dup, c.Group, c.Photo) = (was.Dup, was.Group, was.Photo);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Compares the drive letters with what's listed: new letters (and card readers that now have a card)
+    /// are scanned if they're included, and drives that are gone are removed.
+    /// </summary>
+    private async Task RefreshDriveList()
+    {
+        var pc = _pc;
+        if (pc == null || _cts == null || _diskQuery == null)
+            return; // the first look at the drives hasn't finished
+        var ct = _cts.Token;
+
+        // Readiness is only asked of removable drives: it's instant for card readers, slow for network shares.
+        var (infos, ready, query) = await Task.Run(() =>
+        {
+            var q = DiskInfoProvider.Query();
+            var list = DriveInfo.GetDrives()
+                .Where(d => d.DriveType is DriveType.Fixed or DriveType.Removable or DriveType.Network)
+                .ToList();
+            var r = list.Where(d => d.DriveType == DriveType.Removable)
+                .ToDictionary(d => d.Name, d => { try { return d.IsReady; } catch (IOException) { return false; } }, StringComparer.OrdinalIgnoreCase);
+            return (list, r, q);
+        });
+        if (ct.IsCancellationRequested || pc != _pc)
+            return;
+        _diskQuery = query;
+        _disks = query.ByLetter;
+
+        bool removed = false;
+        var letters = infos.Select(d => d.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in _entries.ToList())
+        {
+            bool gone = !letters.Contains(entry.Name) || (ready.TryGetValue(entry.Name, out bool isReady) && !isReady);
+            if (gone && entry.Node != null)
+            {
+                RemoveDrive(entry, pc);
+                removed = true;
+            }
+            if (!letters.Contains(entry.Name))
+                _entries.Remove(entry);
+        }
+
+        var added = infos
+            .Where(d => !_entries.Any(e => e.Name.Equals(d.Name, StringComparison.OrdinalIgnoreCase)))
+            .Select(d => new DriveEntry(d, ClassifySource(d, query), d.DriveType == DriveType.Network ? NetworkDrives.RemotePath(d.Name) : null))
+            .ToList();
+        _entries.AddRange(added);
+
+        // Removable drives that are ready but not on the map (a card just inserted), and new letters.
+        // Other drives that weren't ready aren't retried here: an offline network share can take 20+ seconds to answer.
+        var toScan = _entries
+            .Where(e => IsIncluded(e) && e.Node == null && !_probing.Contains(e.Name)
+                        && (ready.TryGetValue(e.Name, out bool isReady) ? isReady : added.Contains(e)))
+            .ToList();
+
+        RefreshSidePanel();
+        UpdateStatus();
+        if (toScan.Count > 0)
+            _ = ScanEntries(toScan, pc, ct);
+        else if (removed && _activeBatches == 0 && _refreshing.Count == 0)
+            StartAnalysis();
+    }
+
+    /// <summary>Takes a drive off the map, e.g. a card that was pulled out; it's listed again if it comes back.</summary>
+    private void RemoveDrive(DriveEntry entry, FsNode pc)
+    {
+        entry.Cts?.Cancel();
+        entry.Active = false;
+        entry.NotReady = true;
+        if (entry.Node is not { } node)
+            return;
+        pc.Children!.Remove(node);
+        _scanners.RemoveAll(s => s.Drive == node);
+        _cardStatus.RemoveAll(c => c.Card == node);
+        entry.Node = null;
+        RecomputeRoot(pc);
+        if (_current != null && (_current == node || node.IsAncestorOf(_current)))
+            NavigateTo(pc);
+        else
+        {
+            Map.Invalidate();
+            RefreshSidePanel();
+        }
+    }
+
+    // ---- Full rescan ----
+
+    /// <summary>Forgets every hash and photo detail and scans from scratch, after saying how much will be read.</summary>
+    private async void FullRescan()
+    {
+        var cache = await _cacheTask;
+        var (images, bytes) = _pc != null ? Analyzer.EstimateFullCheck(ViewRoots(_pc), cache) : (0, 0);
+        string slow = bytes > 0
+            ? $"Slow: about {Format.Bytes(bytes)} is read again, plus the details of {Format.Count(images, "image", "images")}. " +
+              "On memory cards and hard drives this can take many minutes."
+            : "Slow: every image is read again. On memory cards and hard drives this can take many minutes.";
+        var confirm = new ConfirmWindow(
+            "Full rescan",
+            "Full rescan?",
+            "Lists every folder again, forgets every saved hash and photo detail, and rebuilds the duplicate check from scratch. " +
+            "For everyday changes, like a card you've just plugged in, use Scan for new: it only reads new or changed images.",
+            slow,
+            "Full rescan")
+        { Owner = this };
+        if (confirm.ShowDialog() != true)
+            return;
+
+        _analysisCts?.Cancel();
+        try
+        {
+            await _analysisTask; // it writes to the cache, so let it stop first
+        }
+        catch (Exception)
+        {
+            // Cancelled or failed; either way it's finished.
+        }
+        cache.Clear();
+        StartScan();
+    }
+
+    private void ScanMenu_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu
+        {
+            PlacementTarget = RescanButton,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+        };
+        var forNew = MenuItem("Scan for new", "", ScanForNew);
+        forNew.InputGestureText = "F5";
+        forNew.ToolTip = "Look for new and changed images. Only those are read; everything else comes from the cache.";
+        menu.Items.Add(forNew);
+
+        var full = MenuItem("Full rescan…", "", FullRescan);
+        full.InputGestureText = "Ctrl+F5";
+        full.ToolTip = "Slow: forgets every saved hash and photo detail and reads every image again. Asks first.";
+        ((TextBlock)full.Icon).Foreground = Theme.StatusWarning;
+        menu.Items.Add(full);
+        menu.IsOpen = true;
+    }
+
+    private void ScanForNew_Click(object sender, RoutedEventArgs e) => ScanForNew();
+
+    /// <summary>Windows says a device or card came or went: look at the drive letters again shortly.</summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        System.Windows.Interop.HwndSource.FromHwnd(new System.Windows.Interop.WindowInteropHelper(this).Handle)?.AddHook(WndProc);
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int WM_DEVICECHANGE = 0x0219, DBT_DEVICEARRIVAL = 0x8000, DBT_DEVICEREMOVECOMPLETE = 0x8004;
+        if (msg == WM_DEVICECHANGE && (wParam == DBT_DEVICEARRIVAL || wParam == DBT_DEVICEREMOVECOMPLETE))
+        {
+            _deviceTimer.Stop();
+            _deviceTimer.Start();
+        }
+        return IntPtr.Zero;
+    }
+
+    private void DeviceSettled()
+    {
+        _deviceTimer.Stop();
+        if (_refreshing.Count == 0 && _scanners.Count > 0)
+            _ = RefreshDriveList();
     }
 
     private void ApplyHardware(FsNode drive, DriveEntry entry)
@@ -417,6 +750,14 @@ public partial class MainWindow : Window
                     : "No ready drives found." + skippedText;
             return;
         }
+        if (_refreshing.Count > 0 && active.Count == 0)
+        {
+            var first = _refreshing[0];
+            StatusText.Text = $"Looking for new images on {Format.Count(_refreshing.Count, "drive", "drives")}…  " +
+                              $"{Format.Count(_refreshing.Sum(s => s.ImagesFound))} images listed  ·  {Format.Duration(_elapsed.Elapsed)}  ·  " +
+                              (first.CurrentPath ?? first.Drive.Name);
+            return;
+        }
         if (active.Count > 0)
         {
             string where = active[0].CurrentPath ?? active[0].Drive.Name;
@@ -428,6 +769,8 @@ public partial class MainWindow : Window
         var pc = _pc!;
         string text = $"Scanned {Format.Count(_scanners.Count, "drive", "drives")} in {Format.Duration(_lastScanFinished)}  ·  " +
                       Format.Count(pc.VisibleCount(ShowAssets), "image", "images");
+        if (_analyzer is { HadCache: true } checkedRun)
+            text += $"  ·  {Format.Count(checkedRun.NewFiles, "new or changed image", "new or changed images")} since the last check";
         if (_analyzer is { Current: not Analyzer.Stage.Done } a)
             text += "  ·  " + AnalysisProgress(a);
         else if (_dups != null)
@@ -995,7 +1338,6 @@ public partial class MainWindow : Window
             }
         }
 
-        bool analyzing = _analyzer is { Current: Analyzer.Stage.Heads or Analyzer.Stage.Full } || (_analyzer == null && _dups == null);
         string Name(Theme.Key key, int value) => key switch
         {
             Theme.Key.Slot => _colorMode switch
@@ -1006,7 +1348,8 @@ public partial class MainWindow : Window
             },
             Theme.Key.Age => AgeBuckets.Label(value),
             Theme.Key.Unique => "No copies",
-            Theme.Key.Pending => analyzing ? "Not checked yet" : "Couldn't be read",
+            Theme.Key.Pending => "Not checked yet",
+            Theme.Key.Unreadable => "Couldn't be read",
             Theme.Key.Asset => "App & game assets",
             _ => "Online-only (not read)",
         };
@@ -1020,8 +1363,9 @@ public partial class MainWindow : Window
                 Theme.Key.Slot => 0,
                 Theme.Key.Unique => 1,
                 Theme.Key.Pending => 2,
-                Theme.Key.Online => 3,
-                _ => 4,
+                Theme.Key.Unreadable => 3,
+                Theme.Key.Online => 4,
+                _ => 5,
             }),
             _ => sizes.OrderBy(kv => kv.Key.Item1 != Theme.Key.Slot).ThenByDescending(kv => kv.Value),
         };
@@ -1825,8 +2169,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Rescan_Click(object sender, RoutedEventArgs e) => StartScan();
-
     private void Assets_Changed(object sender, RoutedEventArgs e)
     {
         if (!_ready)
@@ -1862,9 +2204,14 @@ public partial class MainWindow : Window
             GoUp();
             e.Handled = true;
         }
+        else if (e.Key == Key.F5 && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            FullRescan();
+            e.Handled = true;
+        }
         else if (e.Key == Key.F5)
         {
-            StartScan();
+            ScanForNew();
             e.Handled = true;
         }
         else if (e.Key == Key.Escape && !inText)

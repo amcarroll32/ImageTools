@@ -177,12 +177,17 @@
                         Padding="10,6" IsEnabled="False">
                     <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE74A;" FontSize="14" />
                 </Button>
-                <Button x:Name="RescanButton" DockPanel.Dock="Left" Margin="6,0,6,0" Click="Rescan_Click"
-                        ToolTip="Rescan all drives (F5). Unchanged files aren't read again." Padding="10,6">
+                <Button x:Name="RescanButton" DockPanel.Dock="Left" Margin="6,0,2,0" Click="ScanForNew_Click"
+                        ToolTip="Look for new and changed images on every drive, including cards just plugged in (F5). Only those images are read; everything else comes from the cache."
+                        Padding="10,6">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE72C;" FontSize="14" VerticalAlignment="Center" />
-                        <TextBlock Text="Rescan" Margin="8,0,0,0" VerticalAlignment="Center" />
+                        <TextBlock Text="Scan for new" Margin="8,0,0,0" VerticalAlignment="Center" />
                     </StackPanel>
+                </Button>
+                <Button x:Name="ScanMenuButton" DockPanel.Dock="Left" Margin="0,0,6,0" Click="ScanMenu_Click" Padding="7,6"
+                        ToolTip="More scan options, including a full rescan">
+                    <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE70D;" FontSize="10" VerticalAlignment="Center" />
                 </Button>
                 <Button x:Name="DrivesButton" DockPanel.Dock="Left" Margin="0,0,6,0" Click="DrivesButton_Click" Padding="10,6"
                         ToolTip="Choose which drives to scan. Network and cloud drives are skipped unless you include them.">
@@ -402,7 +407,7 @@
         <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Hairline}" Padding="12,6">
             <DockPanel>
                 <TextBlock DockPanel.Dock="Right" Foreground="{DynamicResource InkMuted}" Margin="16,0,0,0"
-                           Text="Click: zoom in  ·  Right-click: options  ·  Backspace: up  ·  Ctrl+F: search  ·  F5: rescan" />
+                           Text="Click: zoom in  ·  Right-click: options  ·  Backspace: up  ·  Ctrl+F: search  ·  F5: scan for new" />
                 <TextBlock x:Name="StatusText" Foreground="{DynamicResource InkSecondary}" TextTrimming="CharacterEllipsis" />
             </DockPanel>
         </Border>

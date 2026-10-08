@@ -33,6 +33,9 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
         public FsNode Node { get; } = node;
         public string Path { get; } = path;
         public HashCache.Entry Entry { get; set; } = null!;
+
+        /// <summary>The file couldn't be read this time.</summary>
+        public bool Failed { get; set; }
     }
 
     private List<Item> _eligible = [];
@@ -52,8 +55,16 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
 
     // ---- Duplicates ----
 
+    /// <summary>Images this check saw for the first time (or changed since), when the cache wasn't empty.</summary>
+    public long NewFiles { get; private set; }
+
+    /// <summary>The cache had entries when this check started, so <see cref="NewFiles"/> means "since the last check".</summary>
+    public bool HadCache { get; private set; }
+
     public DupResult FindDuplicates(CancellationToken ct)
     {
+        HadCache = cache.Count > 0;
+        int run = cache.BeginRun();
         _eligible = CollectEligible();
 
         // Stage 0: a file with a unique size can't have a byte-identical copy.
@@ -63,7 +74,7 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
             if (group.Count() == 1 || group.Key == 0)
             {
                 foreach (var i in group)
-                    i.Node.Dup = DupStatus.Unique;
+                    MarkUnique(i.Node);
             }
             else
             {
@@ -73,6 +84,7 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
         Candidates = candidates.Count;
         foreach (var item in _eligible)
             item.Entry = cache.Get(item.Path, item.Node.Size, item.Node.LastWrite);
+        NewFiles = _eligible.Count(i => i.Entry.CreatedInRun == run);
 
         // Stage 1: hash the first 64 KB (the whole file when it's smaller).
         Current = Stage.Heads;
@@ -86,14 +98,14 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
 
         // Stage 2: full hashes, only where size and head both collide.
         var sameHead = candidates
-            .Where(i => i.Node.Dup != DupStatus.Unreadable)
+            .Where(i => !i.Failed)
             .GroupBy(i => (i.Node.Size, i.Entry.Head))
             .ToList();
         var needFull = new List<Item>();
         foreach (var group in sameHead)
         {
             if (group.Count() == 1)
-                group.First().Node.Dup = DupStatus.Unique;
+                MarkUnique(group.First().Node);
             else
                 needFull.AddRange(group.Where(i => !i.Entry.HasFull));
         }
@@ -102,15 +114,17 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
         ForEachPerDrive(needFull, HashFull, ct);
         ct.ThrowIfCancellationRequested();
 
+        // Folder totals are rebuilt from scratch now, so they don't flicker to zero while the check runs.
+        ResetFolderTotals();
         var groups = new List<DuplicateGroup>();
         foreach (var group in sameHead.Where(g => g.Count() > 1).SelectMany(g => g)
-                     .Where(i => i.Node.Dup != DupStatus.Unreadable && i.Entry.HasFull)
+                     .Where(i => !i.Failed && i.Entry.HasFull)
                      .GroupBy(i => (i.Node.Size, i.Entry.Full)))
         {
             var members = group.Select(i => i.Node).ToList();
             if (members.Count == 1)
             {
-                members[0].Dup = DupStatus.Unique;
+                MarkUnique(members[0]);
                 continue;
             }
             var dup = new DuplicateGroup(group.Key.Size, members.OrderBy(m => m.FullPath, StringComparer.OrdinalIgnoreCase).ToList());
@@ -128,7 +142,7 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
         }
         groups.Sort((a, b) => b.Extra.CompareTo(a.Extra));
 
-        long unreadable = _eligible.Count(i => i.Node.Dup == DupStatus.Unreadable);
+        long unreadable = _eligible.Count(i => i.Failed);
         return new DupResult(
             groups,
             FindFolderMatches(groups),
@@ -138,34 +152,57 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
             _eligible.Count - unreadable);
     }
 
-    /// <summary>Clears earlier results and lists every image that may be opened, with its path.</summary>
+    /// <summary>
+    /// Lists every image that may be opened, with its path. Earlier results stay on the images
+    /// until this check replaces them, so a re-check after Scan for new doesn't blank the map.
+    /// </summary>
     private List<Item> CollectEligible()
     {
         var items = new List<Item>();
         var stack = new Stack<(FsNode Node, string Path)>();
         foreach (var d in drives)
-        {
             stack.Push((d, d.Name));
-            if (d.Parent is { } root)
-                (root.DupCount, root.DupBytes) = (0, 0);
-        }
         while (stack.Count > 0)
         {
             var (node, path) = stack.Pop();
             if (node.Kind == NodeKind.File)
             {
-                node.Group = null;
-                node.Dup = DupStatus.NotChecked;
                 if (!node.IsAsset && !node.IsCloudOnly)
+                {
                     items.Add(new Item(node, path));
+                }
+                else
+                {
+                    node.Group = null;
+                    node.Dup = DupStatus.NotChecked;
+                }
                 continue;
             }
-            node.DupCount = 0;
-            node.DupBytes = 0;
             foreach (var c in node.Children ?? [])
                 stack.Push((c, Path.Join(path, c.Name)));
         }
         return items;
+    }
+
+    private static void MarkUnique(FsNode file)
+    {
+        file.Group = null;
+        file.Dup = DupStatus.Unique;
+    }
+
+    private void ResetFolderTotals()
+    {
+        var stack = new Stack<FsNode>(drives);
+        if (drives.Count > 0 && drives[0].Parent is { } root)
+            (root.DupCount, root.DupBytes) = (0, 0);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            (node.DupCount, node.DupBytes) = (0, 0);
+            foreach (var c in node.Children ?? [])
+                if (c.Kind != NodeKind.File)
+                    stack.Push(c);
+        }
     }
 
     private void Reset(long total)
@@ -205,6 +242,8 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            item.Failed = true;
+            item.Node.Group = null;
             item.Node.Dup = DupStatus.Unreadable;
         }
         finally
@@ -234,6 +273,8 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            item.Failed = true;
+            item.Node.Group = null;
             item.Node.Dup = DupStatus.Unreadable;
         }
         finally
@@ -329,7 +370,7 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
         var need = new List<Item>();
         foreach (var item in _eligible)
         {
-            if (item.Node.Dup == DupStatus.Unreadable)
+            if (item.Failed)
                 continue;
             if (item.Entry.Photo is { } photo)
                 item.Node.Photo = photo;
@@ -348,6 +389,37 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
             Interlocked.Increment(ref _done);
         }, ct);
         Current = Stage.Done;
+    }
+
+    /// <summary>
+    /// What a full rescan would read again, judged from the cache: the whole of every file that was
+    /// hashed in full, the first 64 KB of the rest that were compared, and details for every image.
+    /// </summary>
+    public static (long Images, long Bytes) EstimateFullCheck(IReadOnlyList<FsNode> drives, HashCache cache)
+    {
+        long images = 0, bytes = 0;
+        var stack = new Stack<(FsNode Node, string Path)>();
+        foreach (var d in drives)
+            stack.Push((d, d.Name));
+        while (stack.Count > 0)
+        {
+            var (node, path) = stack.Pop();
+            if (node.Kind == NodeKind.File)
+            {
+                if (node.IsAsset || node.IsCloudOnly)
+                    continue;
+                images++;
+                var entry = cache.Peek(path, node.Size, node.LastWrite);
+                if (entry is { HasFull: true } && node.Size > HeadBytes)
+                    bytes += node.Size;
+                else if (entry is { HasHead: true })
+                    bytes += Math.Min(node.Size, HeadBytes);
+                continue;
+            }
+            foreach (var c in node.Children ?? [])
+                stack.Push((c, Path.Join(path, c.Name)));
+        }
+        return (images, bytes);
     }
 
     // ---- Parallelism ----
