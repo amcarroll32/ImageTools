@@ -23,6 +23,24 @@ A fast Windows app that finds every photo and image on your drives, shows where 
 - **Run as admin (optional).** One click restarts the app elevated, so folders a normal user can't read are included. Still read-only.
 - **Same look as Disk Visualizer.** Drive frames with health strips and capacity bars, search with wildcards, light and dark themes, previews in the tooltip, and the same keyboard shortcuts.
 
+## Screenshots
+
+**Folder matches.** A camera folder on the card and its archive folder, with how much they share and what's only on one side.
+
+![Matches tab listing folder pairs](docs/screenshot-matches.png)
+
+**Import from a camera card.** New photos are ticked; older ones missing from the archive, and ones already elsewhere, are listed but not ticked.
+
+![Import window choosing images from a camera card](docs/screenshot-import.png)
+
+**Preview changes.** Every copy with its final name, the free space before and after, and nothing applied until you choose to.
+
+![Preview of the copies an import would make](docs/screenshot-preview.png)
+
+**Light theme.**
+
+![The map in the light theme](docs/screenshot-light.png)
+
 ## Running it
 
 ### Portable exe

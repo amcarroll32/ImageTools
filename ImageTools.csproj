@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>ImageTools</RootNamespace>
     <AssemblyName>ImageTools</AssemblyName>
-    <Version>0.1.0-beta.1</Version>
+    <Version>0.1.0-beta.2</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Regenerate with tools/make-icon.ps1 -->
