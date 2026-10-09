@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using ImageTools.Model;
 using ImageTools.Platform;
@@ -11,24 +12,65 @@ namespace ImageTools;
 
 // ---- Rows shown in the window ----
 
-public sealed record FolderHeader(string Title, string PathLine, string Note);
+/// <summary>A heading whose checkbox ticks or unticks every photo under it; partly ticked shows as indeterminate.</summary>
+public abstract class GroupHeader : INotifyPropertyChanged
+{
+    public List<ImportRow> Rows { get; } = [];
 
-public sealed record BucketHeader(string Heading, string Description);
+    /// <summary>Set by the window: ticks or unticks every row in one go.</summary>
+    internal Action<GroupHeader, bool>? SetAll { get; set; }
 
-/// <param name="nameInArchive">A different file with the same name is already in the archive folder.</param>
-public sealed class ImportRow(CardFolder folder, ImportItem item, bool nameInArchive, Action changed) : INotifyPropertyChanged
+    public bool? AllSelected
+    {
+        get
+        {
+            int ticked = Rows.Count(r => r.Selected);
+            return ticked == 0 ? false : ticked == Rows.Count ? true : null;
+        }
+        set
+        {
+            if (value is bool all)
+                SetAll?.Invoke(this, all);
+        }
+    }
+
+    public void Refresh() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AllSelected)));
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
+
+public sealed class FolderHeader(string title, string pathLine, string note) : GroupHeader
+{
+    public string Title { get; } = title;
+    public string PathLine { get; } = pathLine;
+    public string Note { get; } = note;
+}
+
+public sealed class BucketHeader(string heading, string description) : GroupHeader
+{
+    public string Heading { get; } = heading;
+    public string Description { get; } = description;
+}
+
+/// <param name="sameName">A different file with the same name in the archive folder, if there is one.</param>
+public sealed class ImportRow(CardFolder folder, ImportItem item, FsNode? sameName, Action changed) : INotifyPropertyChanged
 {
     private bool _selected = item.Bucket == ImportBucket.New;
+    private bool _current;
 
     public CardFolder Folder { get; } = folder;
     public ImportItem Item { get; } = item;
+    public FsNode? SameName { get; } = sameName;
     public bool Suggested { get; } = item.Bucket == ImportBucket.New;
     public string Name => Item.Image.Name;
     public string DateText => Format.Date(Item.Image.DateTicks);
     public string SizeText => Format.Bytes(Item.Image.Size);
     public string Note => Item.CopyElsewhere is { } copy ? $"also at {copy.FullPath}"
-        : nameInArchive ? $"a different “{Name}” is in the archive – perhaps an edited copy; would be saved with a suffix"
+        : SameName != null ? $"a different “{Name}” is in the archive – perhaps an edited copy; would be saved with a suffix"
         : "";
+
+    /// <summary>What the compare panel shows next to the card's photo: the identical copy, or the same-named archive file.</summary>
+    public FsNode? Counterpart => Item.CopyElsewhere ?? SameName;
 
     public bool Selected
     {
@@ -43,6 +85,19 @@ public sealed class ImportRow(CardFolder folder, ImportItem item, bool nameInArc
         }
     }
 
+    /// <summary>The row shown in the compare panel.</summary>
+    public bool IsCurrent
+    {
+        get => _current;
+        set
+        {
+            _current = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowBackground)));
+        }
+    }
+
+    public Brush RowBackground => _current ? Theme.LinkHover : Brushes.Transparent;
+
     public event PropertyChangedEventHandler? PropertyChanged;
 }
 
@@ -52,14 +107,18 @@ public sealed record ChangeRow(string Glyph, Brush GlyphBrush, string Text, stri
 }
 
 /// <summary>
-/// Import from a camera card in two steps: choose images (new ones are ticked), then preview the
-/// exact changes. Nothing is applied from here yet: this beta only previews.
+/// Import from a camera card: choose images (new ones are ticked; any heading ticks its whole
+/// group; click a row to compare it with the archive), preview the exact changes, then apply them
+/// as verified copies.
 /// </summary>
 public partial class ImportWindow : Window
 {
     private readonly CardStatus _status;
     private readonly HashCache? _cache;
     private readonly List<ImportRow> _rows = [];
+    private readonly List<GroupHeader> _headers = [];
+    private ImportRow? _compared;
+    private int _compareVersion;
     private ImportPlan? _plan;
     private bool _bulk;
     private CancellationTokenSource? _copyCts;
@@ -77,22 +136,25 @@ public partial class ImportWindow : Window
         var items = new List<object>();
         foreach (var folder in status.Folders.Where(f => f.Items.Count > 0))
         {
-            items.Add(MakeFolderHeader(folder));
-            var archiveNames = (folder.Archive?.Children ?? [])
-                .Where(c => c.Kind == NodeKind.File)
-                .Select(c => c.Name)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var folderHeader = MakeFolderHeader(folder);
+            AddHeader(items, folderHeader);
+            var archiveFiles = new Dictionary<string, FsNode>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in (folder.Archive?.Children ?? []).Where(c => c.Kind == NodeKind.File))
+                archiveFiles.TryAdd(f.Name, f);
             foreach (var bucket in new[] { ImportBucket.New, ImportBucket.OlderGap, ImportBucket.Elsewhere })
             {
                 var list = folder.Items.Where(i => i.Bucket == bucket).ToList();
                 if (list.Count == 0)
                     continue;
-                int sameName = list.Count(i => archiveNames.Contains(i.Image.Name));
-                items.Add(MakeBucketHeader(bucket, list.Count, sameName));
+                int sameName = list.Count(i => archiveFiles.ContainsKey(i.Image.Name));
+                var bucketHeader = MakeBucketHeader(bucket, list.Count, sameName);
+                AddHeader(items, bucketHeader);
                 foreach (var item in list)
                 {
-                    var row = new ImportRow(folder, item, archiveNames.Contains(item.Image.Name), SelectionChanged);
+                    var row = new ImportRow(folder, item, archiveFiles.GetValueOrDefault(item.Image.Name), SelectionChanged);
                     _rows.Add(row);
+                    folderHeader.Rows.Add(row);
+                    bucketHeader.Rows.Add(row);
                     items.Add(row);
                 }
             }
@@ -149,12 +211,31 @@ public partial class ImportWindow : Window
         };
     }
 
+    private void AddHeader(List<object> items, GroupHeader header)
+    {
+        header.SetAll = SetGroup;
+        _headers.Add(header);
+        items.Add(header);
+    }
+
+    /// <summary>A heading's checkbox: ticks or unticks every photo under it.</summary>
+    private void SetGroup(GroupHeader header, bool selected)
+    {
+        _bulk = true;
+        foreach (var row in header.Rows)
+            row.Selected = selected;
+        _bulk = false;
+        SelectionChanged();
+    }
+
     private IEnumerable<ImportRow> SelectedRows => _rows.Where(r => r.Selected);
 
     private void SelectionChanged()
     {
         if (_bulk)
             return;
+        foreach (var header in _headers)
+            header.Refresh();
         int count = SelectedRows.Count();
         SelectionSummary.Text = $"{Format.Count(count)} of {Format.Count(_rows.Count, "image", "images")} selected  ·  " +
                                 Format.Bytes(SelectedRows.Sum(r => r.Item.Image.Size));
@@ -170,6 +251,179 @@ public partial class ImportWindow : Window
             row.Selected = all || row.Suggested;
         _bulk = false;
         SelectionChanged();
+    }
+
+    // ---- Compare: the card's photo next to its counterpart ----
+
+    private void Row_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is ImportRow row)
+            ShowCompare(row);
+    }
+
+    private async void ShowCompare(ImportRow row)
+    {
+        if (_compared != null)
+            _compared.IsCurrent = false;
+        _compared = row;
+        row.IsCurrent = true;
+        int version = ++_compareVersion;
+
+        var card = row.Item.Image;
+        var other = row.Counterpart;
+        CompareHint.Visibility = Visibility.Collapsed;
+        CompareGrid.Visibility = Visibility.Visible;
+        RightLabel.Text = row.Item.CopyElsewhere != null ? "ALREADY ON THIS PC" : other != null ? "IN THE ARCHIVE, SAME NAME" : "IN THE ARCHIVE";
+        LeftImage.Source = null;
+        RightImage.Source = null;
+        RightPlaceholder.Text = other == null ? "No file with this name in the archive folder." : "Loading…";
+        RightPlaceholder.Visibility = Visibility.Visible;
+        LeftPlaceholder.Text = "Loading…";
+        LeftPlaceholder.Visibility = Visibility.Visible;
+        ShowDetails(card, other);
+        CompareVerdict.Text = Verdict(row);
+
+        // Details first (they're small), then the two previews. Only the clicked row is ever read.
+        await EnsurePhotoInfo(card);
+        if (other != null)
+            await EnsurePhotoInfo(other);
+        if (version != _compareVersion)
+            return;
+        ShowDetails(card, other);
+        CompareVerdict.Text = Verdict(row);
+
+        await ShowPreview(card, LeftImage, LeftPlaceholder, version);
+        if (other != null)
+            await ShowPreview(other, RightImage, RightPlaceholder, version);
+    }
+
+    private static async Task EnsurePhotoInfo(FsNode node)
+    {
+        if (node.Photo != null || node.IsCloudOnly)
+            return;
+        string path = node.FullPath;
+        node.Photo = await Task.Run(() => PhotoProperties.Read(path)) ?? PhotoInfo.Empty;
+    }
+
+    private async Task ShowPreview(FsNode node, Image image, TextBlock placeholder, int version)
+    {
+        string path = node.FullPath;
+        if (node.IsCloudOnly || !ImageFormats.CanPreview(node.Format))
+        {
+            placeholder.Text = node.IsCloudOnly ? "Online-only: not opened, so it isn't downloaded." : "No preview for this format.";
+            return;
+        }
+        if (!Thumbnails.TryGetCached(path, out var bitmap, Thumbnails.CompareWidth))
+        {
+            bitmap = await Thumbnails.LoadAsync(path, node.Size, Thumbnails.CompareWidth);
+            Thumbnails.Remember(path, bitmap, Thumbnails.CompareWidth);
+        }
+        if (version != _compareVersion)
+            return;
+        if (bitmap == null)
+        {
+            placeholder.Text = "Windows couldn't make a preview of this file.";
+            return;
+        }
+        image.Source = bitmap;
+        image.LayoutTransform = (node.Photo?.Orientation ?? 1) switch
+        {
+            3 => new RotateTransform(180),
+            6 => new RotateTransform(90),
+            8 => new RotateTransform(270),
+            _ => Transform.Identity,
+        };
+        placeholder.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>Two columns of details; values that differ are highlighted on both sides.</summary>
+    private void ShowDetails(FsNode card, FsNode? other)
+    {
+        var fields = new List<(string Left, string? Right, bool Differs)>();
+        void Add(string left, string? right) => fields.Add((left, right, other != null && left != right));
+        var a = card.Photo;
+        var b = other?.Photo;
+
+        Add(card.Name, other?.Name);
+        Add($"{Format.Bytes(card.Size)} ({card.Size:N0} bytes)", other != null ? $"{Format.Bytes(other.Size)} ({other.Size:N0} bytes)" : null);
+        Add(Dimensions(a), other != null ? Dimensions(b) : null);
+        Add(Taken(a), other != null ? Taken(b) : null);
+        Add($"Modified {Stamp(card.LastWrite)}", other != null ? $"Modified {Stamp(other.LastWrite)}" : null);
+        Add(a?.Camera ?? "Camera not recorded", other != null ? b?.Camera ?? "Camera not recorded" : null);
+        if (a is { Rating: > 0 } || b is { Rating: > 0 } || a?.Tags != null || b?.Tags != null)
+            Add(Extras(a), other != null ? Extras(b) : null);
+
+        LeftDetails.Children.Clear();
+        RightDetails.Children.Clear();
+        foreach (var (left, right, differs) in fields)
+        {
+            LeftDetails.Children.Add(DetailLine(left, differs));
+            if (other != null)
+                RightDetails.Children.Add(DetailLine(right ?? "", differs));
+        }
+        LeftDetails.Children.Add(PathLine(card.Parent?.FullPath ?? ""));
+        if (other != null)
+            RightDetails.Children.Add(PathLine(other.Parent?.FullPath ?? ""));
+    }
+
+    private static string Dimensions(PhotoInfo? p) => p is { Width: > 0, Height: > 0 } ? $"{p.Width} × {p.Height}" : "Size not recorded";
+
+    private static string Taken(PhotoInfo? p) => p is { DateTaken: > 0 } ? $"Taken {Stamp(p.DateTaken)}" : "No date taken";
+
+    private static string Extras(PhotoInfo? p) =>
+        string.Join("  ·  ", new[] { p?.Stars ?? "", p?.Tags != null ? $"Tags: {p.Tags}" : "" }.Where(s => s.Length > 0)) is { Length: > 0 } s ? s : "No rating or tags";
+
+    private static string Stamp(long utcTicks) =>
+        utcTicks <= 0 ? "unknown" : new DateTime(utcTicks, DateTimeKind.Utc).ToLocalTime().ToString("d MMM yyyy HH:mm:ss");
+
+    private static TextBlock DetailLine(string text, bool differs) => new()
+    {
+        Text = text,
+        Foreground = differs ? Theme.AccentText : Theme.SecondaryText,
+        FontWeight = differs ? FontWeights.SemiBold : FontWeights.Normal,
+        TextTrimming = TextTrimming.CharacterEllipsis,
+        ToolTip = text,
+        Margin = new Thickness(0, 1, 0, 1),
+    };
+
+    private static TextBlock PathLine(string text) => new()
+    {
+        Text = text,
+        FontSize = 11,
+        Foreground = Theme.MutedText,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(0, 6, 0, 0),
+    };
+
+    /// <summary>A one-line reading of the comparison, to help decide copy or skip.</summary>
+    private static string Verdict(ImportRow row)
+    {
+        var card = row.Item.Image;
+        if (row.Item.CopyElsewhere is { } copy)
+            return $"An identical copy is already at {copy.Parent?.FullPath}" +
+                   (copy.Group?.ByFingerprint == true ? " (matched by fingerprint)." : ".") +
+                   " Copying would add another.";
+        if (row.SameName is not { } other)
+            return row.Item.Bucket == ImportBucket.New
+                ? "Not in the archive yet, and not anywhere else on this PC."
+                : "Not in the archive under this name, and not anywhere else on this PC – perhaps deleted from the archive on purpose.";
+
+        var (a, b) = (card.Photo, other.Photo);
+        bool bothDated = a is { DateTaken: > 0 } && b is { DateTaken: > 0 };
+        bool sameShot = bothDated && a!.DateTaken == b!.DateTaken;
+        bool sameSize = a is { Width: > 0 } && b is { Width: > 0 } && a.Width == b.Width && a.Height == b.Height;
+        string keep = $" Copying keeps both: the card's would be saved as “{System.IO.Path.GetFileNameWithoutExtension(card.Name)} (2){System.IO.Path.GetExtension(card.Name)}”.";
+        bool metadataChanged = a != null && b != null && (a.Rating != b.Rating || a.Tags != b.Tags);
+        if (sameShot && sameSize && metadataChanged)
+            return "Same shot – the archive copy has a different rating or tags. Rating or tagging a photo in Windows rewrites the file, " +
+                   "so they no longer match byte for byte; the picture itself is very likely unchanged." + keep;
+        if (sameShot && sameSize)
+            return "Same shot (same date taken and dimensions), but the files differ – probably edited, rotated or re-saved." + keep;
+        if (sameShot)
+            return "Same shot (same date taken), different dimensions – probably resized or cropped." + keep;
+        if (bothDated)
+            return "A different photo that happens to share the name – the camera's counter has probably wrapped around." + keep;
+        return "Same name, different contents. Compare the previews to decide." + keep;
     }
 
     // ---- Step 2: preview changes ----

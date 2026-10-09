@@ -4,7 +4,7 @@
         xmlns:local="clr-namespace:ImageTools"
         Title="Import from camera card"
         Icon="Assets/app.ico"
-        Width="980" Height="720" MinWidth="760" MinHeight="480"
+        Width="1320" Height="780" MinWidth="1040" MinHeight="520"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource WindowBg}"
         UseLayoutRounding="True"
@@ -34,39 +34,59 @@
             </Setter>
         </Style>
 
-        <!-- Select step: a folder pair, then its sections, then image rows. -->
+        <!-- Select step: a folder pair, then its sections, then image rows. Each heading's checkbox ticks everything under it. -->
         <DataTemplate DataType="{x:Type local:FolderHeader}">
-            <StackPanel Margin="16,16,16,4">
-                <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                <TextBlock Text="{Binding PathLine}" FontSize="11" Foreground="{DynamicResource InkMuted}" Margin="0,2,0,0"
-                           TextTrimming="CharacterEllipsis" ToolTip="{Binding PathLine}" />
-                <TextBlock Text="{Binding Note}" FontSize="12" Foreground="{DynamicResource InkSecondary}" Margin="0,4,0,0" TextWrapping="Wrap" />
-            </StackPanel>
+            <Grid Margin="16,16,16,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <CheckBox IsChecked="{Binding AllSelected, Mode=TwoWay}" VerticalAlignment="Top" MinWidth="0" Margin="0,1,4,0"
+                          ToolTip="Tick or untick every photo in this folder" />
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding PathLine}" FontSize="11" Foreground="{DynamicResource InkMuted}" Margin="0,2,0,0"
+                               TextTrimming="CharacterEllipsis" ToolTip="{Binding PathLine}" />
+                    <TextBlock Text="{Binding Note}" FontSize="12" Foreground="{DynamicResource InkSecondary}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
         </DataTemplate>
 
         <DataTemplate DataType="{x:Type local:BucketHeader}">
-            <StackPanel Margin="16,10,16,4">
-                <TextBlock Text="{Binding Heading}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource InkMuted}" />
-                <TextBlock Text="{Binding Description}" FontSize="11" Foreground="{DynamicResource InkMuted}" TextWrapping="Wrap" Margin="0,1,0,0" />
-            </StackPanel>
-        </DataTemplate>
-
-        <DataTemplate DataType="{x:Type local:ImportRow}">
-            <Grid Margin="16,0,16,0">
+            <Grid Margin="16,10,16,4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="220" />
-                    <ColumnDefinition Width="110" />
-                    <ColumnDefinition Width="80" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <CheckBox IsChecked="{Binding Selected, Mode=TwoWay}" VerticalAlignment="Center" MinWidth="0" Margin="0,0,4,0" />
-                <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Column="2" Text="{Binding DateText}" VerticalAlignment="Center" Foreground="{DynamicResource InkSecondary}" />
-                <TextBlock Grid.Column="3" Text="{Binding SizeText}" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,16,0" />
-                <TextBlock Grid.Column="4" Text="{Binding Note}" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource InkMuted}"
-                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Note}" />
+                <CheckBox IsChecked="{Binding AllSelected, Mode=TwoWay}" VerticalAlignment="Top" MinWidth="0" Margin="0,-3,4,0"
+                          ToolTip="Tick or untick every photo in this group" />
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding Heading}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource InkMuted}" />
+                    <TextBlock Text="{Binding Description}" FontSize="11" Foreground="{DynamicResource InkMuted}" TextWrapping="Wrap" Margin="0,1,0,0" />
+                </StackPanel>
             </Grid>
+        </DataTemplate>
+
+        <!-- Click a row to compare it; the checkbox still just ticks. -->
+        <DataTemplate DataType="{x:Type local:ImportRow}">
+            <Border Background="{Binding RowBackground}" CornerRadius="4" Margin="12,0,12,0" Padding="4,0" Cursor="Hand"
+                    MouseLeftButtonUp="Row_Click" ToolTip="Click to compare with the archive">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="200" />
+                        <ColumnDefinition Width="100" />
+                        <ColumnDefinition Width="76" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <CheckBox IsChecked="{Binding Selected, Mode=TwoWay}" VerticalAlignment="Center" MinWidth="0" Margin="0,0,4,0" />
+                    <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="2" Text="{Binding DateText}" VerticalAlignment="Center" Foreground="{DynamicResource InkSecondary}" />
+                    <TextBlock Grid.Column="3" Text="{Binding SizeText}" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,16,0" />
+                    <TextBlock Grid.Column="4" Text="{Binding Note}" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource InkMuted}"
+                               TextTrimming="CharacterEllipsis" />
+                </Grid>
+            </Border>
         </DataTemplate>
 
         <!-- Preview step: one row per change. -->
@@ -113,6 +133,47 @@
                     <TextBlock x:Name="SelectionSummary" VerticalAlignment="Center" HorizontalAlignment="Right"
                                Foreground="{DynamicResource InkSecondary}" />
                 </DockPanel>
+            </Border>
+            <!-- Compare: the card's photo next to its counterpart -->
+            <Border DockPanel.Dock="Right" Width="560" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource Hairline}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="16,12,16,16">
+                        <TextBlock Text="COMPARE" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource InkMuted}" />
+                        <TextBlock x:Name="CompareHint" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{DynamicResource InkSecondary}"
+                                   Text="Click a photo to see it next to the archive's file with the same name, or the copy that's already elsewhere. Differences are highlighted." />
+                        <Grid x:Name="CompareGrid" Visibility="Collapsed" Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="ON THE CARD" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource AccentInk}" Margin="0,0,0,4" />
+                            <TextBlock x:Name="RightLabel" Grid.Column="2" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource InkMuted}" Margin="0,0,0,4" />
+                            <Border Grid.Row="1" Height="190" CornerRadius="4" Background="{DynamicResource BarTrack}">
+                                <Grid>
+                                    <TextBlock x:Name="LeftPlaceholder" FontSize="11" Foreground="{DynamicResource InkMuted}" TextWrapping="Wrap"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" Margin="8" />
+                                    <Image x:Name="LeftImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+                                </Grid>
+                            </Border>
+                            <Border Grid.Row="1" Grid.Column="2" Height="190" CornerRadius="4" Background="{DynamicResource BarTrack}">
+                                <Grid>
+                                    <TextBlock x:Name="RightPlaceholder" FontSize="11" Foreground="{DynamicResource InkMuted}" TextWrapping="Wrap"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" Margin="8" />
+                                    <Image x:Name="RightImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+                                </Grid>
+                            </Border>
+                            <StackPanel x:Name="LeftDetails" Grid.Row="2" Margin="0,8,0,0" />
+                            <StackPanel x:Name="RightDetails" Grid.Row="2" Grid.Column="2" Margin="0,8,0,0" />
+                        </Grid>
+                        <TextBlock x:Name="CompareVerdict" Margin="0,12,0,0" TextWrapping="Wrap" FontWeight="SemiBold" />
+                    </StackPanel>
+                </ScrollViewer>
             </Border>
             <ItemsControl x:Name="RowsList" Style="{StaticResource FlatList}" Padding="0,0,0,12" />
         </DockPanel>
