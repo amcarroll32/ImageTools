@@ -12,11 +12,18 @@ public sealed record PhotoInfo(long DateTaken, string? Camera, int Width, int He
     public string Stars => Rating > 0 ? new string('★', Rating) + new string('☆', 5 - Rating) : "";
 }
 
-/// <summary>Byte-identical images.</summary>
-public sealed class DuplicateGroup(long size, List<FsNode> members)
+/// <summary>Identical images: byte-identical, or matched by fingerprint where a memory card is involved.</summary>
+public sealed class DuplicateGroup(long size, List<FsNode> members, bool byFingerprint = false)
 {
     public long Size { get; } = size;
     public List<FsNode> Members { get; } = members;
+
+    /// <summary>
+    /// Some members (on a memory card) were matched by size, first 64 KB and fingerprint rather than
+    /// read in full. Good enough to decide "copy or not"; anything that would overwrite or delete a
+    /// copy must confirm byte for byte first.
+    /// </summary>
+    public bool ByFingerprint { get; } = byFingerprint;
 
     /// <summary>Space taken by the extra copies.</summary>
     public long Extra => Size * (Members.Count - 1);

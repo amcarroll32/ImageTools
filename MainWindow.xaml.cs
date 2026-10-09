@@ -801,7 +801,8 @@ public partial class MainWindow : Window
     private static string AnalysisProgress(Analyzer a) => a.Current switch
     {
         Analyzer.Stage.Heads => $"Checking {Format.Count(a.Candidates)} possible duplicates…  {Format.Count(a.Done)} of {Format.Count(a.Total)} read",
-        Analyzer.Stage.Full => $"Comparing matching files in full…  {Format.Bytes(a.Done)} of {Format.Bytes(a.Total)}",
+        Analyzer.Stage.Prints => $"Fingerprinting likely matches…  {Format.Count(a.Done)} of {Format.Count(a.Total)}",
+        Analyzer.Stage.Full => $"Comparing matching files in full (memory cards excepted)…  {Format.Bytes(a.Done)} of {Format.Bytes(a.Total)}",
         _ => $"Reading photo details…  {Format.Count(a.Done)} of {Format.Count(a.Total)}",
     };
 
@@ -1508,8 +1509,9 @@ public partial class MainWindow : Window
         DupesTab.Header = groups.Count > 0 ? $"Duplicates ({Format.Count(groups.Count)})" : "Duplicates";
         DupesSummary.Text = groups.Count == 0
             ? $"No duplicate images in {ScopeName(view)}."
-            : $"{Format.Count(files)} images in {ScopeName(view)} are byte-identical copies, in {Format.Count(groups.Count, "group", "groups")}  ·  " +
-              $"{Format.Bytes(extra)} in extra copies. Nothing is moved or deleted." +
+            : $"{Format.Count(files)} images in {ScopeName(view)} are identical copies, in {Format.Count(groups.Count, "group", "groups")}  ·  " +
+              $"{Format.Bytes(extra)} in extra copies. Copies on fixed drives are byte-identical; ones on memory cards are matched by fingerprint. " +
+              "Nothing is moved or deleted." +
               (groups.Count > MaxCards ? $" Showing the largest {MaxCards}." : "");
         DupesList.ItemsSource = groups.Take(MaxCards).Select(MakeDupCard).ToList();
     }
@@ -1532,7 +1534,7 @@ public partial class MainWindow : Window
             first.Name,
             $"{Format.Bytes(g.Extra)} extra",
             "",
-            Format.Count(g.Members.Count, "identical copy", "identical copies"),
+            Format.Count(g.Members.Count, "identical copy", "identical copies") + (g.ByFingerprint ? " (card copies matched by fingerprint)" : ""),
             Theme.AccentText,
             advice,
             locations,
@@ -1793,7 +1795,8 @@ public partial class MainWindow : Window
         {
             var others = group.Members.Where(m => m != node).ToList();
             lines.Add($"{Format.Count(others.Count, "other copy", "other copies")}: {others[0].FullPath}" +
-                      (others.Count > 1 ? $" (+ {Format.Count(others.Count - 1)} more)" : ""));
+                      (others.Count > 1 ? $" (+ {Format.Count(others.Count - 1)} more)" : "") +
+                      (group.ByFingerprint ? "  ·  matched by fingerprint (memory card)" : ""));
         }
         else
             lines.Add(node.Dup switch

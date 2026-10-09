@@ -12,7 +12,9 @@ namespace ImageTools.Platform;
 /// </summary>
 public sealed class HashCache
 {
-    private const string Magic = "ITC1";
+    // ITC2 adds fingerprints (flag 8); ITC1 files still load, they just have none.
+    private const string Magic = "ITC2";
+    private const string OldMagic = "ITC1";
 
     private static readonly string PortablePath = Path.Combine(AppContext.BaseDirectory, "ImageTools.cache");
 
@@ -32,6 +34,12 @@ public sealed class HashCache
         public UInt128 Full { get; set; }
         public bool HasHead { get; set; }
         public bool HasFull { get; set; }
+
+        /// <summary>SHA-256 of the last 64 KB and three 16 KB samples from inside the file: a fingerprint
+        /// that, with the size and first 64 KB, tells files apart without reading them in full.</summary>
+        public UInt128 Print { get; set; }
+        public bool HasPrint { get; set; }
+
         public PhotoInfo? Photo { get; set; }
 
         /// <summary>Looked up during this session, so it still describes a file that exists.</summary>
@@ -82,7 +90,8 @@ public sealed class HashCache
                 if (!File.Exists(path))
                     continue;
                 using var reader = new BinaryReader(new BufferedStream(File.OpenRead(path), 1 << 16), Encoding.UTF8);
-                if (new string(reader.ReadChars(4)) != Magic)
+                string magic = new(reader.ReadChars(4));
+                if (magic != Magic && magic != OldMagic)
                     continue;
                 int count = reader.ReadInt32();
                 for (int i = 0; i < count; i++)
@@ -99,6 +108,11 @@ public sealed class HashCache
                     {
                         entry.HasFull = true;
                         entry.Full = ReadHash(reader);
+                    }
+                    if ((flags & 8) != 0)
+                    {
+                        entry.HasPrint = true;
+                        entry.Print = ReadHash(reader);
                     }
                     if ((flags & 4) != 0)
                     {
@@ -156,9 +170,10 @@ public sealed class HashCache
                     writer.Write(e.Size);
                     writer.Write(e.Modified);
                     var photo = e.Photo;
-                    writer.Write((byte)((e.HasHead ? 1 : 0) | (e.HasFull ? 2 : 0) | (photo != null ? 4 : 0)));
+                    writer.Write((byte)((e.HasHead ? 1 : 0) | (e.HasFull ? 2 : 0) | (photo != null ? 4 : 0) | (e.HasPrint ? 8 : 0)));
                     if (e.HasHead) WriteHash(writer, e.Head);
                     if (e.HasFull) WriteHash(writer, e.Full);
+                    if (e.HasPrint) WriteHash(writer, e.Print);
                     if (photo != null)
                     {
                         writer.Write(photo.DateTaken);

@@ -9,20 +9,25 @@ using Microsoft.Win32.SafeHandles;
 namespace ImageTools.Scanning;
 
 /// <summary>
-/// Runs after the scan: finds byte-identical images, then reads photo details.
-/// Duplicates are found in stages so most files are never read in full:
-/// same size → same first 64 KB → same SHA-256 of the whole file. Hashes and details are
-/// cached per path. App assets and online-only files are never opened.
+/// Runs after the scan: finds identical images, then reads photo details. Duplicates are found
+/// in stages so most files are never read in full: same size → same first 64 KB → same
+/// fingerprint (last 64 KB and three samples inside) → same SHA-256 of the whole file.
+/// Files on memory cards stop at the fingerprint: reading a card in full is slow, and a
+/// fingerprint is plenty to decide whether a card photo still needs copying. Hashes and details
+/// are cached per path. App assets and online-only files are never opened.
 /// </summary>
 public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
 {
     public const int HeadBytes = 64 * 1024;
+    private const int TailBytes = 64 * 1024;
+    private const int SampleBytes = 16 * 1024;
     private const int MaxFoldersPerGroup = 40;
     private const int MaxMatches = 500;
 
     public enum Stage
     {
         Heads,
+        Prints,
         Full,
         Details,
         Done,
@@ -96,18 +101,40 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
             Interlocked.Increment(ref _done);
         }, ct);
 
-        // Stage 2: full hashes, only where size and head both collide.
+        // Stage 2: fingerprints where size and head both collide. A different fingerprint proves
+        // the files differ, so near-misses are ruled out without reading them in full.
         var sameHead = candidates
             .Where(i => !i.Failed)
             .GroupBy(i => (i.Node.Size, i.Entry.Head))
             .ToList();
-        var needFull = new List<Item>();
+        var needPrint = new List<Item>();
         foreach (var group in sameHead)
         {
             if (group.Count() == 1)
                 MarkUnique(group.First().Node);
             else
-                needFull.AddRange(group.Where(i => !i.Entry.HasFull));
+                needPrint.AddRange(group.Where(i => !i.Entry.HasPrint));
+        }
+        Current = Stage.Prints;
+        Reset(needPrint.Count);
+        ForEachPerDrive(needPrint, item =>
+        {
+            HashPrint(item);
+            Interlocked.Increment(ref _done);
+        }, ct);
+
+        // Stage 3: full hashes where the fingerprint matches too, but only for files on fixed drives.
+        var samePrint = sameHead.Where(g => g.Count() > 1).SelectMany(g => g)
+            .Where(i => !i.Failed)
+            .GroupBy(i => (i.Node.Size, i.Entry.Head, i.Entry.Print))
+            .ToList();
+        var needFull = new List<Item>();
+        foreach (var group in samePrint)
+        {
+            if (group.Count() == 1)
+                MarkUnique(group.First().Node);
+            else
+                needFull.AddRange(group.Where(i => !i.Entry.HasFull && !OnCard(i)));
         }
         Current = Stage.Full;
         Reset(needFull.Sum(i => i.Node.Size));
@@ -117,28 +144,25 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
         // Folder totals are rebuilt from scratch now, so they don't flicker to zero while the check runs.
         ResetFolderTotals();
         var groups = new List<DuplicateGroup>();
-        foreach (var group in sameHead.Where(g => g.Count() > 1).SelectMany(g => g)
-                     .Where(i => !i.Failed && i.Entry.HasFull)
-                     .GroupBy(i => (i.Node.Size, i.Entry.Full)))
+        foreach (var group in samePrint.Where(g => g.Count() > 1))
         {
-            var members = group.Select(i => i.Node).ToList();
-            if (members.Count == 1)
+            var members = group.Where(i => !i.Failed).ToList();
+            var proven = members.Where(i => i.Entry.HasFull).GroupBy(i => i.Entry.Full).Select(g => g.ToList()).ToList();
+            var printOnly = members.Where(i => !i.Entry.HasFull).ToList(); // card files, matched by fingerprint
+
+            // A card file joins the byte-identical set its fingerprint matches, when there's exactly one.
+            // If the fixed-drive files themselves differ (vanishingly rare), the card files aren't
+            // counted as archived anywhere, so they'd be copied rather than wrongly skipped.
+            if (proven.Count == 1)
             {
-                MarkUnique(members[0]);
-                continue;
+                AddGroup(groups, [.. proven[0], .. printOnly], byFingerprint: printOnly.Count > 0);
             }
-            var dup = new DuplicateGroup(group.Key.Size, members.OrderBy(m => m.FullPath, StringComparer.OrdinalIgnoreCase).ToList());
-            foreach (var m in members)
+            else
             {
-                m.Dup = DupStatus.Duplicate;
-                m.Group = dup;
-                for (var a = m.Parent; a != null; a = a.Parent)
-                {
-                    a.DupCount++;
-                    a.DupBytes += m.Size;
-                }
+                foreach (var set in proven)
+                    AddGroup(groups, set, byFingerprint: false);
+                AddGroup(groups, printOnly, byFingerprint: true);
             }
-            groups.Add(dup);
         }
         groups.Sort((a, b) => b.Extra.CompareTo(a.Extra));
 
@@ -190,6 +214,33 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
         file.Dup = DupStatus.Unique;
     }
 
+    /// <summary>Files on memory cards are matched by fingerprint and never read in full here.</summary>
+    private static bool OnCard(Item item) => CardSync.IsCard(item.Node.Drive);
+
+    private static void AddGroup(List<DuplicateGroup> groups, List<Item> items, bool byFingerprint)
+    {
+        if (items.Count == 0)
+            return;
+        if (items.Count == 1)
+        {
+            MarkUnique(items[0].Node);
+            return;
+        }
+        var members = items.Select(i => i.Node).OrderBy(m => m.FullPath, StringComparer.OrdinalIgnoreCase).ToList();
+        var dup = new DuplicateGroup(members[0].Size, members, byFingerprint);
+        foreach (var m in members)
+        {
+            m.Dup = DupStatus.Duplicate;
+            m.Group = dup;
+            for (var a = m.Parent; a != null; a = a.Parent)
+            {
+                a.DupCount++;
+                a.DupBytes += m.Size;
+            }
+        }
+        groups.Add(dup);
+    }
+
     private void ResetFolderTotals()
     {
         var stack = new Stack<FsNode>(drives);
@@ -238,6 +289,60 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
                 item.Entry.Full = hash;
                 item.Entry.HasFull = true;
             }
+            cache.MarkDirty();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            item.Failed = true;
+            item.Node.Group = null;
+            item.Node.Dup = DupStatus.Unreadable;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>
+    /// The last 64 KB plus 16 KB at a quarter, half and three quarters of the way through: about
+    /// 112 KB per file wherever it is, instead of all of it. Small files are covered by the head already.
+    /// </summary>
+    private void HashPrint(Item item)
+    {
+        long size = item.Node.Size;
+        if (size <= HeadBytes)
+        {
+            item.Entry.Print = item.Entry.Head;
+            item.Entry.HasPrint = true;
+            cache.MarkDirty();
+            return;
+        }
+
+        var buffer = ArrayPool<byte>.Shared.Rent(TailBytes);
+        try
+        {
+            using var handle = File.OpenHandle(item.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.RandomAccess);
+            using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            foreach (var (offset, length) in new[]
+                     {
+                         (size / 4, SampleBytes),
+                         (size / 2, SampleBytes),
+                         (size * 3 / 4, SampleBytes),
+                         (Math.Max(0, size - TailBytes), TailBytes),
+                     })
+            {
+                int want = (int)Math.Min(length, size - offset), read = 0;
+                while (read < want)
+                {
+                    int n = RandomAccess.Read(handle, buffer.AsSpan(read, want - read), offset + read);
+                    if (n == 0)
+                        break;
+                    read += n;
+                }
+                sha.AppendData(buffer, 0, read);
+            }
+            item.Entry.Print = ToHash(sha.GetHashAndReset());
+            item.Entry.HasPrint = true;
             cache.MarkDirty();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -410,10 +515,13 @@ public sealed class Analyzer(IReadOnlyList<FsNode> drives, HashCache cache)
                     continue;
                 images++;
                 var entry = cache.Peek(path, node.Size, node.LastWrite);
-                if (entry is { HasFull: true } && node.Size > HeadBytes)
+                long head = Math.Min(node.Size, HeadBytes);
+                if (entry is { HasFull: true } && node.Size > HeadBytes && !CardSync.IsCard(node.Drive))
                     bytes += node.Size;
+                else if (entry is { HasPrint: true } && node.Size > HeadBytes)
+                    bytes += head + Math.Min(node.Size - head, TailBytes + 3 * SampleBytes);
                 else if (entry is { HasHead: true })
-                    bytes += Math.Min(node.Size, HeadBytes);
+                    bytes += head;
                 continue;
             }
             foreach (var c in node.Children ?? [])
