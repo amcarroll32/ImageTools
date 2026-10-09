@@ -23,6 +23,13 @@
     <Resource Include="Assets/app.ico" />
   </ItemGroup>
 
+  <!-- tests/ holds separate console harnesses that reference this project -->
+  <ItemGroup>
+    <Compile Remove="tests/**" />
+    <Page Remove="tests/**" />
+    <None Remove="tests/**" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="System.Management" Version="10.0.12" />
   </ItemGroup>

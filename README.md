@@ -86,3 +86,4 @@ dotnet run -c Release
 | `src/Treemap/` | Squarified treemap drawing and hit testing, and the color theme |
 | `MainWindow.xaml(.cs)` | Toolbar, side panel, cards, tooltips and navigation |
 | `DESIGN.md` | The design language shared with Disk Visualizer |
+| `tests/` | Console test harnesses for the copy engine and duplicate matching (`dotnet run` in each folder) |
