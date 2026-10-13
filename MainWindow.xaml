@@ -314,10 +314,9 @@
                                         </StackPanel>
                                         <TextBlock Text="{Binding Advice}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,6"
                                                    Foreground="{DynamicResource InkSecondary}" />
-                                        <WrapPanel Visibility="{Binding ReviewVisibility}">
-                                            <Button Style="{StaticResource SmallButton}" Content="Review import…" Tag="{Binding Status}"
-                                                    Click="ReviewImport_Click"
-                                                    ToolTip="Choose images and preview exactly what would be copied. Nothing changes until you apply." />
+                                        <WrapPanel>
+                                            <Button Style="{StaticResource SmallButton}" Content="{Binding ReviewText}" Tag="{Binding Status}"
+                                                    Click="ReviewImport_Click" ToolTip="{Binding ReviewTip}" />
                                         </WrapPanel>
                                     </StackPanel>
                                 </Border>

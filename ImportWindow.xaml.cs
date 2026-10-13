@@ -39,11 +39,27 @@ public abstract class GroupHeader : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 }
 
-public sealed class FolderHeader(string title, string pathLine, string note) : GroupHeader
+/// <param name="folder">The camera folder on the card.</param>
+/// <param name="pairing">Its archive folder, or null when none was found.</param>
+/// <param name="cantPair">Why the pairing can't be changed by hand, or null when it can.</param>
+/// <param name="ruledOut">Folders the user said aren't its archive.</param>
+public sealed class FolderHeader(string title, string pathLine, string note, FsNode folder, CardFolder? pairing, string? cantPair, int ruledOut)
+    : GroupHeader
 {
     public string Title { get; } = title;
     public string PathLine { get; } = pathLine;
     public string Note { get; } = note;
+    public FsNode Folder { get; } = folder;
+    public CardFolder? Pairing { get; } = pairing;
+
+    public Visibility CheckVisibility => Rows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    public bool CanPair => cantPair == null;
+    public string ChangeText => Pairing == null ? "Choose archive folder…" : "Change archive folder…";
+    public string ChangeTip => cantPair ?? "Pick the PC folder these photos belong in. You'll see what changes before it's saved.";
+    public Visibility RuleOutVisibility => CanPair && Pairing is { Source: not ArchiveSource.Chosen } ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility ResetVisibility => CanPair && (Pairing?.Source == ArchiveSource.Chosen || ruledOut > 0) ? Visibility.Visible : Visibility.Collapsed;
+    public string ResetTip => "Forget your choice" + (ruledOut > 0 ? $" and the {Format.Count(ruledOut, "folder", "folders")} you ruled out" : "") +
+                              ", and pair this card folder automatically again.";
 }
 
 public sealed class BucketHeader(string heading, string description) : GroupHeader
@@ -109,12 +125,14 @@ public sealed record ChangeRow(string Glyph, Brush GlyphBrush, string Text, stri
 /// <summary>
 /// Import from a camera card: choose images (new ones are ticked; any heading ticks its whole
 /// group; click a row to compare it with the archive), preview the exact changes, then apply them
-/// as verified copies.
+/// as verified copies. Each card folder's archive folder can be changed or ruled out here too.
 /// </summary>
 public partial class ImportWindow : Window
 {
-    private readonly CardStatus _status;
+    private CardStatus _status;
     private readonly HashCache? _cache;
+    private readonly IReadOnlyList<FsNode> _drives;
+    private readonly Func<FsNode, CardStatus?> _repair;
     private readonly List<ImportRow> _rows = [];
     private readonly List<GroupHeader> _headers = [];
     private ImportRow? _compared;
@@ -127,17 +145,43 @@ public partial class ImportWindow : Window
     /// <summary>Images copied by this window, so the main window knows to look for them.</summary>
     public int CopiedImages { get; private set; }
 
-    public ImportWindow(CardStatus status, HashCache? cache)
+    /// <param name="drives">The scanned drives, to preview a pairing change against.</param>
+    /// <param name="repair">Pairs the cards again after a pairing change, and returns this card's new status.</param>
+    public ImportWindow(CardStatus status, HashCache? cache, IReadOnlyList<FsNode> drives, Func<FsNode, CardStatus?> repair)
     {
         InitializeComponent();
         _status = status;
         _cache = cache;
+        _drives = drives;
+        _repair = repair;
+        Build();
+    }
+
+    /// <summary>
+    /// Lists every camera folder on the card, with the images not yet in its archive. On a rebuild
+    /// after a pairing change, ticks are kept for images whose archive folder didn't change.
+    /// </summary>
+    private void Build()
+    {
+        var status = _status;
+        var kept = _rows.ToDictionary(r => r.Item.Image, r => (r.Folder.ArchivePath, r.Selected));
+        _rows.Clear();
+        _headers.Clear();
+        _compared = null;
+        _compareVersion++;
+        CompareHint.Visibility = Visibility.Visible;
+        CompareGrid.Visibility = Visibility.Collapsed;
+        CompareVerdict.Text = "";
 
         var items = new List<object>();
-        foreach (var folder in status.Folders.Where(f => f.Items.Count > 0))
+        var pairings = status.Folders.ToDictionary(f => f.Folder);
+        foreach (var cameraFolder in status.Folders.Select(f => f.Folder).Concat(status.Unmatched)
+                     .OrderBy(f => f.FullPath, StringComparer.OrdinalIgnoreCase))
         {
-            var folderHeader = MakeFolderHeader(folder);
+            var folderHeader = MakeFolderHeader(status.Card, cameraFolder, pairings.GetValueOrDefault(cameraFolder));
             AddHeader(items, folderHeader);
+            if (!pairings.TryGetValue(cameraFolder, out var folder))
+                continue;
             var archiveFiles = new Dictionary<string, FsNode>(StringComparer.OrdinalIgnoreCase);
             foreach (var f in (folder.Archive?.Children ?? []).Where(c => c.Kind == NodeKind.File))
                 archiveFiles.TryAdd(f.Name, f);
@@ -152,6 +196,12 @@ public partial class ImportWindow : Window
                 foreach (var item in list)
                 {
                     var row = new ImportRow(folder, item, archiveFiles.GetValueOrDefault(item.Image.Name), SelectionChanged);
+                    if (kept.TryGetValue(item.Image, out var before) && before.ArchivePath.Equals(folder.ArchivePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _bulk = true;
+                        row.Selected = before.Selected;
+                        _bulk = false;
+                    }
                     _rows.Add(row);
                     folderHeader.Rows.Add(row);
                     bucketHeader.Rows.Add(row);
@@ -168,16 +218,31 @@ public partial class ImportWindow : Window
                           "Nothing is copied until you preview the changes and apply them.";
         if (status.Unmatched.Count > 0)
             subtitle += $"\n{Format.Count(status.Unmatched.Count, "folder", "folders")} on the card ({string.Join(", ", status.Unmatched.Select(f => f.Name))}) " +
-                        "have no archive folder yet and aren't listed. Import them once by hand and Image Tools will follow them from then on.";
+                        "have no archive folder yet. Choose one below to list their photos, and Image Tools will follow them from then on.";
         HeaderSubtitle.Text = subtitle;
         SelectionChanged();
     }
 
-    private static FolderHeader MakeFolderHeader(CardFolder folder)
+    private static FolderHeader MakeFolderHeader(FsNode card, FsNode cameraFolder, CardFolder? folder)
     {
+        string? cantPair = ArchivePairing.CantPair(card);
+        int ruledOut = cantPair == null ? App.Settings.Pairings.RejectedCount(CardSync.Key(card, cameraFolder)) : 0;
+        string ruledOutNote = ruledOut > 0 ? $" You ruled out {Format.Count(ruledOut, "folder", "folders")}." : "";
+        if (folder == null)
+            return new FolderHeader(
+                $"{cameraFolder.Name}  →  no archive folder",
+                cameraFolder.FullPath,
+                $"{Format.Count(CardSync.Images(cameraFolder).Count(), "image", "images")}, not in any folder Image Tools could pair it with. " +
+                "Choose its archive folder to list them for import." + ruledOutNote,
+                cameraFolder, null, cantPair, ruledOut);
+
         bool exists = folder.Archive != null || Directory.Exists(folder.ArchivePath);
         string note = folder.Source switch
         {
+            ArchiveSource.Chosen when !exists =>
+                "Chosen by you. A new folder.",
+            ArchiveSource.Chosen =>
+                "Chosen by you.",
             ArchiveSource.NextToSiblings when !exists =>
                 "New folder, next to where this card's other folders are archived.",
             ArchiveSource.NextToSiblings =>
@@ -188,10 +253,48 @@ public partial class ImportWindow : Window
         };
         if (folder.Shared > 0)
             note = (note + $" {Format.Count(folder.Shared, "image is", "images are")} already there; the newest was taken {Format.Date(folder.Cutoff)}.").Trim();
+        if (folder.Items.Count == 0)
+            note = (note + " Every image is already archived.").Trim();
         return new FolderHeader(
             $"{folder.Folder.Name}  →  {Format.ShortPath(folder.ArchivePath)}",
             $"{folder.Folder.FullPath}  →  {folder.ArchivePath}",
-            note);
+            (note + ruledOutNote).Trim(),
+            cameraFolder, folder, cantPair, ruledOut);
+    }
+
+    // ---- Archive folder: change, rule out, or go back to automatic ----
+
+    private void ChangeArchive_Click(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is FolderHeader h)
+            AfterPairing(ArchivePairing.Choose(this, _drives, _status.Card, h.Folder, h.Pairing));
+    }
+
+    private void RuleOut_Click(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is FolderHeader { Pairing: { } pairing })
+            AfterPairing(ArchivePairing.RuleOut(this, _drives, _status.Card, pairing));
+    }
+
+    private void ResetArchive_Click(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is FolderHeader h)
+            AfterPairing(ArchivePairing.Reset(this, _drives, _status.Card, h.Folder, h.Pairing));
+    }
+
+    /// <summary>Pairs the card again and relists it, keeping the ticks that still apply.</summary>
+    private void AfterPairing(bool changed)
+    {
+        if (!changed)
+            return;
+        if (_repair(_status.Card) is not { } status)
+        {
+            Close();
+            return;
+        }
+        _status = status;
+        Build();
+        FooterNote.Text = "Archive folder saved. The list below is updated.";
     }
 
     /// <param name="sameName">How many of these have a different file with the same name in the archive.</param>

@@ -13,12 +13,30 @@ public enum ImportBucket
 /// <summary>How the archive folder for a card folder was found.</summary>
 public enum ArchiveSource
 {
+    Chosen,          // picked by the user: beats everything automatic
     Matched,         // it holds at least half of the card folder's images, or has the same name
     Remembered,      // matched on an earlier scan of this card
     NextToSiblings,  // the card's other folders are archived side by side; this one goes next to them
 }
 
 public sealed record ImportItem(FsNode Image, ImportBucket Bucket, FsNode? CopyElsewhere);
+
+/// <summary>
+/// The user's corrections to automatic pairing, keyed like <see cref="CardSync.Key"/>: archive
+/// folders they chose themselves, and folders they said aren't the archive.
+/// </summary>
+public sealed record PairingChoices(Dictionary<string, string> Chosen, Dictionary<string, List<string>> Rejected)
+{
+    public bool IsRejected(string key, string path) =>
+        Rejected.TryGetValue(key, out var paths) && paths.Any(p => p.Equals(path, StringComparison.OrdinalIgnoreCase));
+
+    public int RejectedCount(string key) => Rejected.TryGetValue(key, out var paths) ? paths.Count : 0;
+
+    /// <summary>A copy to try a change on without touching the saved choices.</summary>
+    public PairingChoices Copy() => new(
+        new Dictionary<string, string>(Chosen),
+        Rejected.ToDictionary(kv => kv.Key, kv => kv.Value.ToList()));
+}
 
 /// <param name="Archive">The archive folder in the scanned tree; null when it doesn't exist yet (or holds no images).</param>
 /// <param name="Cutoff">Newest date among images already in the archive (UTC ticks); 0 when none are.</param>
@@ -71,11 +89,16 @@ public static class CardSync
     public static string Key(FsNode card, FsNode folder) =>
         $"{CardId(card)}|{Path.GetRelativePath(card.Name, folder.FullPath)}";
 
+    /// <summary>A card's folders can only be paired by hand when the card can be told apart next time.</summary>
+    public static bool CanRemember(FsNode card) => card.VolumeSerial != 0;
+
     /// <summary>
     /// Status of every memory card among <paramref name="drives"/>. Confident matches are added to
     /// <paramref name="remembered"/>, so the card is recognized even after its folders stop matching.
+    /// The user's <paramref name="choices"/> come first, and a folder they ruled out is never used.
     /// </summary>
-    public static List<CardStatus> Find(IReadOnlyList<FsNode> drives, Dictionary<string, string> remembered, out bool rememberedChanged)
+    public static List<CardStatus> Find(IReadOnlyList<FsNode> drives, Dictionary<string, string> remembered, PairingChoices choices,
+        out bool rememberedChanged)
     {
         rememberedChanged = false;
         var result = new List<CardStatus>();
@@ -89,13 +112,23 @@ public static class CardSync
             bool recognized = card.VolumeSerial != 0 && remembered.Keys.Any(k => k.StartsWith(prefix, StringComparison.Ordinal));
             var archives = new Dictionary<FsNode, (FsNode? Archive, string Path, ArchiveSource Source)>();
 
-            // 1. A folder that holds at least half of the card folder's images (or shares its name).
-            foreach (var f in folders)
+            bool canRemember = CanRemember(card);
+            bool Rejected(FsNode f, string path) => canRemember && choices.IsRejected(Key(card, f), path);
+
+            // 0. The folder the user chose for it, whether or not it exists yet.
+            foreach (var f in folders.Where(_ => canRemember))
             {
-                if (StrongMatch(f) is not { } match)
+                if (choices.Chosen.TryGetValue(Key(card, f), out var path))
+                    archives[f] = (FindByPath(drives, path), path, ArchiveSource.Chosen);
+            }
+
+            // 1. A folder that holds at least half of the card folder's images (or shares its name).
+            foreach (var f in folders.Where(f => !archives.ContainsKey(f)))
+            {
+                if (StrongMatch(f, path => Rejected(f, path)) is not { } match)
                     continue;
                 archives[f] = (match, match.FullPath, ArchiveSource.Matched);
-                if (card.VolumeSerial != 0)
+                if (canRemember)
                 {
                     string key = Key(card, f);
                     if (!remembered.TryGetValue(key, out var old) || !old.Equals(match.FullPath, StringComparison.OrdinalIgnoreCase))
@@ -106,26 +139,41 @@ public static class CardSync
                 }
             }
 
-            // 2. The archive this card folder matched last time.
-            foreach (var f in folders.Where(f => !archives.ContainsKey(f)))
+            // 2. The archive this card folder matched last time, unless the user has since ruled it out.
+            foreach (var f in folders.Where(f => !archives.ContainsKey(f) && canRemember))
             {
-                if (card.VolumeSerial != 0 && remembered.TryGetValue(Key(card, f), out var path) && FindByPath(drives, path) is { } node)
+                string key = Key(card, f);
+                if (!remembered.TryGetValue(key, out var path))
+                    continue;
+                if (Rejected(f, path))
+                {
+                    remembered.Remove(key);
+                    rememberedChanged = true;
+                }
+                else if (FindByPath(drives, path) is { } node)
+                {
                     archives[f] = (node, path, ArchiveSource.Remembered);
+                }
             }
 
-            // 3. Next to where the card's other folders are archived (e.g. a new 102CANON beside 100CANON and 101CANON).
+            // 3. Next to where the card's other folders are archived (e.g. a new 102CANON beside 100CANON and 101CANON),
+            //    including a chosen folder that doesn't exist yet.
             foreach (var f in folders.Where(f => !archives.ContainsKey(f)))
             {
-                var parent = archives
-                    .Where(kv => kv.Key.Parent == f.Parent && kv.Value.Archive?.Parent is { Kind: NodeKind.Directory or NodeKind.Drive })
-                    .GroupBy(kv => kv.Value.Archive!.Parent!)
+                string? parent = archives
+                    .Where(kv => kv.Key.Parent == f.Parent)
+                    .Select(kv => Path.GetDirectoryName(kv.Value.Path))
+                    .Where(p => p != null)
+                    .GroupBy(p => p!, StringComparer.OrdinalIgnoreCase)
                     .OrderByDescending(g => g.Count())
                     .Select(g => g.Key)
                     .FirstOrDefault();
                 if (parent == null)
                     continue;
-                var existing = parent.Children?.FirstOrDefault(c => c.Kind == NodeKind.Directory && c.Name.Equals(f.Name, StringComparison.OrdinalIgnoreCase));
-                archives[f] = (existing, Path.Join(parent.FullPath, f.Name), ArchiveSource.NextToSiblings);
+                string path = Path.Join(parent, f.Name);
+                if (Rejected(f, path))
+                    continue;
+                archives[f] = (FindByPath(drives, path), path, ArchiveSource.NextToSiblings);
             }
 
             var planned = folders.Where(archives.ContainsKey)
@@ -160,9 +208,10 @@ public static class CardSync
     /// <summary>
     /// The PC folder that shares the most images with a card folder, if it's clearly its archive:
     /// it holds at least half of the card folder's images, or has the same name (100CANON ↔ 100CANON).
-    /// A handful of photos picked out into some project folder doesn't count.
+    /// A handful of photos picked out into some project folder doesn't count, and neither does a
+    /// folder the user ruled out.
     /// </summary>
-    private static FsNode? StrongMatch(FsNode folder)
+    private static FsNode? StrongMatch(FsNode folder, Func<string, bool> rejected)
     {
         var images = Images(folder).ToList();
         var counts = new Dictionary<FsNode, int>();
@@ -176,6 +225,7 @@ public static class CardSync
                     counts[m.Parent!] = counts.GetValueOrDefault(m.Parent!) + 1;
         }
         return counts
+            .Where(kv => !rejected(kv.Key.FullPath))
             .Where(kv => kv.Value * 2 >= images.Count
                          || (kv.Key.Name.Equals(folder.Name, StringComparison.OrdinalIgnoreCase) && kv.Value >= Math.Min(3, images.Count)))
             .OrderByDescending(kv => kv.Value)

@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ImageTools.Model;
 using Microsoft.Win32;
 
 namespace ImageTools.Platform;
@@ -30,6 +31,15 @@ public sealed class AppSettings
     /// "volume serial-capacity|folder path on the card" (e.g. "01234567-62GB|DCIM\100CANON").
     /// </summary>
     public Dictionary<string, string> CardArchives { get; set; } = [];
+
+    /// <summary>Archive folders the user chose for card folders (same keys); these beat automatic pairing.</summary>
+    public Dictionary<string, string> CardArchiveChoices { get; set; } = [];
+
+    /// <summary>Folders the user said aren't a card folder's archive (same keys); never paired automatically.</summary>
+    public Dictionary<string, List<string>> CardArchiveRejects { get; set; } = [];
+
+    [JsonIgnore]
+    public PairingChoices Pairings => new(CardArchiveChoices, CardArchiveRejects);
 
     public static AppSettings Load()
     {

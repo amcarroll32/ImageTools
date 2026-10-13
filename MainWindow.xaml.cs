@@ -904,7 +904,11 @@ public partial class MainWindow : Window
         string BadgeText,
         Brush BadgeBrush,
         string Advice,
-        Visibility ReviewVisibility);
+        string ReviewText,
+        string ReviewTip);
+
+    private const string ReviewImportText = "Review import…";
+    private const string ReviewImportTip = "Choose images and preview exactly what would be copied. Nothing changes until you apply.";
 
     /// <summary>Pairs each memory card's folders with their archive folders and badges the card.</summary>
     private void UpdateCardSync()
@@ -921,7 +925,7 @@ public partial class MainWindow : Window
             f.PairNote = null;
         _pairedFolders.Clear();
 
-        _cardStatus = CardSync.Find(ViewRoots(pc), App.Settings.CardArchives, out bool remembered);
+        _cardStatus = CardSync.Find(ViewRoots(pc), App.Settings.CardArchives, App.Settings.Pairings, out bool remembered);
         if (remembered)
             App.Settings.Save();
 
@@ -948,6 +952,50 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>After the user changes a pairing: pair the cards again and redraw everything that shows it.</summary>
+    private void RefreshCardPairing()
+    {
+        UpdateCardSync();
+        Map.Invalidate();
+        RefreshSidePanel();
+        RefreshCards();
+        UpdateStatus();
+    }
+
+    /// <summary>Right-click entries for a card folder, or for a PC folder paired with one.</summary>
+    private void AddPairingItems(ContextMenu menu, FsNode node)
+    {
+        if (_pc == null || node.Kind != NodeKind.Directory)
+            return;
+        var drives = ViewRoots(_pc);
+        var items = new List<MenuItem>();
+        foreach (var s in _cardStatus.Where(s => ArchivePairing.CantPair(s.Card) == null))
+        {
+            var card = s.Card;
+            var pairing = s.Folders.FirstOrDefault(f => f.Folder == node);
+            if (pairing != null || s.Unmatched.Contains(node))
+            {
+                items.Add(MenuItem(pairing == null ? "Choose archive folder…" : "Change archive folder…", "\uE8DE",
+                    () => { if (ArchivePairing.Choose(this, drives, card, node, pairing)) RefreshCardPairing(); }));
+                if (pairing is { Source: not ArchiveSource.Chosen })
+                    items.Add(MenuItem($"“{Format.ShortPath(pairing.ArchivePath)}” isn't the archive", "\uE711",
+                        () => { if (ArchivePairing.RuleOut(this, drives, card, pairing)) RefreshCardPairing(); }));
+                if (pairing?.Source == ArchiveSource.Chosen || App.Settings.Pairings.RejectedCount(CardSync.Key(card, node)) > 0)
+                    items.Add(MenuItem("Let Image Tools choose the archive", "\uE777",
+                        () => { if (ArchivePairing.Reset(this, drives, card, node, pairing)) RefreshCardPairing(); }));
+            }
+            foreach (var f in s.Folders.Where(f => f.Archive == node))
+                items.Add(MenuItem($"Not the archive of {f.Folder.Name} on card {card.DisplayName}", "\uE711",
+                    () => { if (ArchivePairing.RuleOut(this, drives, card, f)) RefreshCardPairing(); }));
+        }
+        if (items.Count == 0)
+            return;
+        if (menu.Items.Count > 0)
+            menu.Items.Add(new Separator());
+        foreach (var item in items)
+            menu.Items.Add(item);
+    }
+
     private void ShowImportBanners(FsNode view)
     {
         ImportBanners.ItemsSource = _cardStatus
@@ -971,7 +1019,7 @@ public partial class MainWindow : Window
             ? $" {Format.Count(s.OtherCount, "older image or copy", "older images or copies")} found elsewhere aren't ticked."
             : "";
         string unmatched = s.Unmatched.Count > 0
-            ? $" {Format.Count(s.UnmatchedImages, "image", "images")} in {string.Join(", ", s.Unmatched.Select(f => f.Name))} have no archive folder yet."
+            ? $" {Format.Count(s.UnmatchedImages, "image", "images")} in {string.Join(", ", s.Unmatched.Select(f => f.Name))} have no archive folder yet – choose one in Review."
             : "";
 
         if (s.NewCount > 0)
@@ -979,18 +1027,19 @@ public partial class MainWindow : Window
             long first = s.NewItems.Min(i => i.Image.DateTicks), last = s.NewItems.Max(i => i.Image.DateTicks);
             string taken = Format.Date(first) == Format.Date(last) ? Format.Date(first) : $"{Format.Date(first)} – {Format.Date(last)}";
             return new ImportBanner(s, title, Format.Bytes(s.NewBytes), "", Format.Count(s.NewCount, "new image", "new images"), Theme.AccentText,
-                $"{seen}Taken {taken}. Not yet in {where}.{others}{unmatched}", Visibility.Visible);
+                $"{seen}Taken {taken}. Not yet in {where}.{others}{unmatched}", ReviewImportText, ReviewImportTip);
         }
         if (s.OtherCount > 0)
             return new ImportBanner(s, title, "", "", "No new images", Theme.StatusGood,
-                $"{seen}Nothing newer than the archive.{others} Review to sync the whole card.{unmatched}", Visibility.Visible);
+                $"{seen}Nothing newer than the archive.{others} Review to sync the whole card.{unmatched}", ReviewImportText, ReviewImportTip);
         if (s.UpToDate)
             return new ImportBanner(s, title, "", "", "Archived", Theme.StatusGood,
                 $"{seen}Every image on the card is already in {string.Join(", ", s.Folders.Select(f => Format.ShortPath(f.ArchivePath)).Distinct())}.",
-                Visibility.Collapsed);
+                "Archive folders…", "See where this card's folders are archived, and change it if it's wrong.");
         return new ImportBanner(s, title, "", "", "No archive folder found", Theme.MutedText,
-            $"{Format.Count(s.UnmatchedImages, "image", "images")} on the card aren't in any archive folder. Import them once by hand and " +
-            "Image Tools will follow the card from then on.", Visibility.Collapsed);
+            $"{Format.Count(s.UnmatchedImages, "image", "images")} on the card aren't in any archive folder. Choose the folder they go to, " +
+            "and Image Tools will follow the card from then on.",
+            "Choose archive folder…", "Pick the PC folder this card's photos are archived to. You'll see what changes before it's saved.");
     }
 
     private void ReviewImport_Click(object sender, RoutedEventArgs e)
@@ -998,7 +1047,12 @@ public partial class MainWindow : Window
         if (((FrameworkElement)sender).Tag is not CardStatus status)
             return;
         var cache = _cacheTask.IsCompletedSuccessfully ? _cacheTask.Result : null;
-        var window = new ImportWindow(status, cache) { Owner = this };
+        var drives = _pc != null ? ViewRoots(_pc) : [];
+        var window = new ImportWindow(status, cache, drives, card =>
+        {
+            RefreshCardPairing();
+            return _cardStatus.FirstOrDefault(s => s.Card == card);
+        }) { Owner = this };
         window.ShowDialog();
         if (window.CopiedImages > 0)
             ScanForNew(); // the copies are already in the cache, so this only lists folders
@@ -1907,6 +1961,8 @@ public partial class MainWindow : Window
             menu.Items.Add(MenuItem(node.Kind == NodeKind.File ? "Show in Explorer" : "Open in Explorer", "", () => OpenInExplorer(node)));
             menu.Items.Add(MenuItem("Copy path", "", () => CopyPath(node)));
         }
+
+        AddPairingItems(menu, node);
 
         if (node.Group is { } group)
         {

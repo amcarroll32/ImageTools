@@ -34,6 +34,32 @@
             </Setter>
         </Style>
 
+        <!-- A text-only button for actions inside a heading. -->
+        <Style x:Key="LinkButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentInk}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Margin" Value="0,0,12,0" />
+            <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="Transparent" CornerRadius="4" Padding="4,2">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource LinkHover}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource InkMuted}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Select step: a folder pair, then its sections, then image rows. Each heading's checkbox ticks everything under it. -->
         <DataTemplate DataType="{x:Type local:FolderHeader}">
             <Grid Margin="16,16,16,4">
@@ -42,12 +68,21 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <CheckBox IsChecked="{Binding AllSelected, Mode=TwoWay}" VerticalAlignment="Top" MinWidth="0" Margin="0,1,4,0"
-                          ToolTip="Tick or untick every photo in this folder" />
+                          ToolTip="Tick or untick every photo in this folder" Visibility="{Binding CheckVisibility}" />
                 <StackPanel Grid.Column="1">
                     <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                     <TextBlock Text="{Binding PathLine}" FontSize="11" Foreground="{DynamicResource InkMuted}" Margin="0,2,0,0"
                                TextTrimming="CharacterEllipsis" ToolTip="{Binding PathLine}" />
                     <TextBlock Text="{Binding Note}" FontSize="12" Foreground="{DynamicResource InkSecondary}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                    <WrapPanel Margin="-4,4,0,0">
+                        <Button Style="{StaticResource LinkButton}" Content="{Binding ChangeText}" IsEnabled="{Binding CanPair}"
+                                ToolTip="{Binding ChangeTip}" Click="ChangeArchive_Click" />
+                        <Button Style="{StaticResource LinkButton}" Content="Not the archive" Visibility="{Binding RuleOutVisibility}"
+                                ToolTip="This folder isn't where this card folder's photos belong. Image Tools won't pair them again."
+                                Click="RuleOut_Click" />
+                        <Button Style="{StaticResource LinkButton}" Content="Let Image Tools choose" Visibility="{Binding ResetVisibility}"
+                                ToolTip="{Binding ResetTip}" Click="ResetArchive_Click" />
+                    </WrapPanel>
                 </StackPanel>
             </Grid>
         </DataTemplate>
