@@ -661,9 +661,9 @@ public partial class ImportWindow : Window
     {
         CopyOutcome.Copied => new ChangeRow("", Theme.StatusGood, $"{Path.GetFileName(r.Copy.Source)}  →  {r.Copy.Target}",
             $"copied and verified  ·  {Format.Bytes(r.Copy.Bytes)}" + (r.Copy.IsSidecar ? "  ·  sidecar" : ""), r.Copy.Note),
-        CopyOutcome.Skipped => new ChangeRow("", Theme.StatusWarning, $"{Path.GetFileName(r.Copy.Source)}  →  {r.Copy.Target}",
+        CopyOutcome.Skipped => new ChangeRow(Theme.WarningGlyph, Theme.StatusWarning, $"{Path.GetFileName(r.Copy.Source)}  →  {r.Copy.Target}",
             "skipped", r.Reason),
-        _ => new ChangeRow("", Theme.StatusCritical, $"{Path.GetFileName(r.Copy.Source)}  →  {r.Copy.Target}",
+        _ => new ChangeRow(Theme.WarningGlyph, Theme.StatusCritical, $"{Path.GetFileName(r.Copy.Source)}  →  {r.Copy.Target}",
             "not copied", r.Reason),
     };
 

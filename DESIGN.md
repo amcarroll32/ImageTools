@@ -145,7 +145,8 @@ The XAML resource key is how the token is referenced from markup (always via `Dy
 
 ### 3.2 Status colors
 
-These are always paired with a text label or glyph, never color alone.
+These are always paired with a text label or glyph, never color alone. Warning and Critical share
+one icon, the filled warning triangle `E814` (see §5); the color says how serious it is.
 
 | Meaning | Dark | Light |
 |---|---|---|
@@ -298,14 +299,13 @@ dropdown chevron.
 | Zoom in | `E71E` | Zoom into |
 | Open folder | `E838` | Open / show in Explorer |
 | Copy | `E8C8` | Copy path |
-| Warning triangle | `E814` | Alert (paired with a label) |
+| Warning triangle | `E814` | **The only warning icon.** In Warning yellow for caution (disk health Warning, a skipped copy, a partial folder match, a pairing that needs checking); in Critical red for a failure or a blocker (disk Unhealthy, a copy that failed, a folder that can't be used). Uncolored in a menu item for a costly action ("Full rescan…"). Always next to a label. In Theme as `WarningGlyph`. |
 | Sun / Moon | `E706` / `E708` | Theme toggle. **The button shows the mode you'd switch to.** |
 | Gear | `E713` | Settings menu (rightmost in the toolbar, next to the theme toggle) |
 | Chevron right | `E76C` | Breadcrumb separator (10, Muted) |
 | Check mark | `E73E` | Good state, paired with a label: "Archived", "Same images", copied and verified |
-| Warning | `E7BA` | Warning rows in lists, menus and dialogs: a skipped copy, "Full rescan…" |
 | Info | `E946` | Neutral note in a preview; "No archive folder found" |
-| Cancel | `E711` | Rule something out ("Not the archive"); a copy that failed |
+| Cancel | `E711` | Rule something out ("Not the archive"). An action, never a status: failures use the red warning triangle |
 | Restore | `E777` | Go back to the automatic choice |
 | Download | `E896` | New items to import (canvas badge, import card) |
 | Picture | `E8B9` | Open image |
@@ -314,8 +314,8 @@ dropdown chevron.
 | Document | `E8A5` | Sidecar file that travels with an image (in a preview) |
 | Archive folder | `E8DE` | Change or choose an archive folder |
 
-Both warning glyphs are in use today: `E814` on the canvas and in the pairing preview, `E7BA` in
-lists, menus and the confirm dialog. Settle on one the next time either is touched.
+Don't use the outline warning glyph `E7BA`: in yellow on the light theme it nearly disappears. The
+filled `E814` reads in both colors on both themes.
 
 ---
 

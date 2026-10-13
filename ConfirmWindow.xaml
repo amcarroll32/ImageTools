@@ -17,7 +17,7 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="WarningGlyph" Text="&#xE7BA;" FontFamily="{StaticResource Icons}" FontSize="14" Margin="0,2,10,0" />
+                    <TextBlock x:Name="WarningGlyph" Text="&#xE814;" FontFamily="{StaticResource Icons}" FontSize="14" Margin="0,2,10,0" />
                     <TextBlock x:Name="WarningText" Grid.Column="1" TextWrapping="Wrap" FontWeight="SemiBold" />
                 </Grid>
             </Border>

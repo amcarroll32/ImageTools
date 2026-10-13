@@ -649,7 +649,7 @@ public partial class MainWindow : Window
         forNew.ToolTip = "Look for new and changed images. Only those are read; everything else comes from the cache.";
         menu.Items.Add(forNew);
 
-        var full = MenuItem("Full rescan…", "", FullRescan);
+        var full = MenuItem("Full rescan…", Theme.WarningGlyph, FullRescan);
         full.InputGestureText = "Ctrl+F5";
         full.ToolTip = "Slow: forgets every saved hash and photo detail and reads every image again. Asks first.";
         ((TextBlock)full.Icon).Foreground = Theme.StatusWarning;
@@ -1184,7 +1184,7 @@ public partial class MainWindow : Window
         Visibility Detail2Visibility = Visibility.Collapsed,
         Brush? GlyphBrush = null)
     {
-        public string AlertGlyph => Theme.AlertGlyph;
+        public string AlertGlyph => Theme.WarningGlyph;
 
         /// <summary>Drive icon color: the accent for a source camera card, ink otherwise.</summary>
         public Brush GlyphInk => GlyphBrush ?? Theme.PrimaryText;
@@ -1648,7 +1648,7 @@ public partial class MainWindow : Window
                 $"Both folders hold the same {Format.Count(m.CountA, "image", "images")}."),
             MatchKind.Contained => ("", "All inside the other", Theme.StatusGood,
                 $"All {Format.Count(m.CountA, "image", "images")} in “{a}” are also in “{b}”, which has {Format.Count(m.CountB)} in all."),
-            _ => ("", m.SharedInA >= m.CountA * 0.9 ? "Nearly all inside the other" : "Partly the same", Theme.StatusWarning,
+            _ => (Theme.WarningGlyph, m.SharedInA >= m.CountA * 0.9 ? "Nearly all inside the other" : "Partly the same", Theme.StatusWarning,
                 $"{Format.Count(m.SharedInA)} of the {Format.Count(m.CountA, "image", "images")} in “{a}” ({Format.Percent(shared)}) " +
                 $"are also in “{b}”, which has {Format.Count(m.CountB)} in all. {Format.Count(m.CountA - m.SharedInA, "is", "are")} only in “{a}”."),
         };

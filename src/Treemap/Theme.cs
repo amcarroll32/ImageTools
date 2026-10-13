@@ -229,8 +229,12 @@ public static class Theme
 
     public static Brush FolderFill(int depth) => _folderFills[depth % _folderFills.Length];
 
-    /// <summary>Exclamation-in-triangle glyph for disks in Warning or Unhealthy state.</summary>
-    public const string AlertGlyph = "";
+    /// <summary>
+    /// The one warning icon, a filled triangle with an exclamation mark: in <see cref="StatusWarning"/>
+    /// (yellow) for caution, in <see cref="StatusCritical"/> (red) for a failure or something that
+    /// blocks. Always shown next to a label that says what's wrong.
+    /// </summary>
+    public const string WarningGlyph = "\uE814";
 
     /// <summary>Icon-font glyph for a drive: SSD, hard drive, USB stick or memory card.</summary>
     public static string DriveGlyph(FsNode drive) =>

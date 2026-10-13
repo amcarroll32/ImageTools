@@ -38,7 +38,7 @@ public partial class PairingWindow : Window
 /// </summary>
 public static class ArchivePairing
 {
-    private const string Warn = "", Info = "";
+    private const string Warn = Theme.WarningGlyph, Info = "";
 
     /// <summary>Why the card's folders can't be paired by hand, or null when they can.</summary>
     public static string? CantPair(FsNode card) => CardSync.CanRemember(card)

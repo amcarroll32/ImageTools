@@ -727,7 +727,7 @@ public sealed class TreemapControl : FrameworkElement
         FormattedText? alertIcon = null, alertText = null;
         if (healthBrush != null && health != DiskHealth.Healthy)
         {
-            alertIcon = MakeIcon(Theme.AlertGlyph, 13, healthBrush);
+            alertIcon = MakeIcon(Theme.WarningGlyph, 13, healthBrush);
             alertText = MakeText(node.Hardware!.HealthLabel, ink, 12, true, 120);
         }
         // A camera card says whether it has new images for its archive.
