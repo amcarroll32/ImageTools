@@ -50,6 +50,7 @@ public partial class MainWindow : Window
 
     /// <summary>Card folders and archive folders whose header notes the pairing; cleared before each update.</summary>
     private readonly List<FsNode> _pairedFolders = [];
+    private readonly List<FsNode> _sameShots = [];
     private FsNode? _tipNode;
     private Point _tipPoint;
     private int _tick;
@@ -924,6 +925,9 @@ public partial class MainWindow : Window
         foreach (var f in _pairedFolders)
             f.PairNote = null;
         _pairedFolders.Clear();
+        foreach (var f in _sameShots)
+            f.SameShot = null;
+        _sameShots.Clear();
 
         _cardStatus = CardSync.Find(ViewRoots(pc), App.Settings.CardArchives, App.Settings.Pairings, out bool remembered);
         if (remembered)
@@ -943,6 +947,13 @@ public partial class MainWindow : Window
                     f.Archive.PairNote = $"archive of card {s.Card.DisplayName}";
                     _pairedFolders.Add(f.Archive);
                 }
+            }
+
+            foreach (var (card, archived) in CardSync.SameShots(s))
+            {
+                (card.SameShot, archived.SameShot) = (archived, card);
+                _sameShots.Add(card);
+                _sameShots.Add(archived);
             }
 
             if (s.NewCount > 0)
@@ -1406,6 +1417,7 @@ public partial class MainWindow : Window
     private string DupText(FsNode file) => file.Dup switch
     {
         DupStatus.Duplicate => Format.Count(file.Group!.Members.Count - 1, "other copy", "other copies"),
+        DupStatus.Unique when file.SameShot != null => "same shot, files differ",
         DupStatus.Unique => "no copies",
         DupStatus.Unreadable => "couldn't be read",
         _ when file.IsAsset => "app asset, not checked",
@@ -1439,6 +1451,7 @@ public partial class MainWindow : Window
         {
             Theme.Key.Slot => _colorMode switch
             {
+                ColorMode.Duplicates when value == 1 => "Same shot in the archive, files differ",
                 ColorMode.Duplicates => "Has a copy elsewhere",
                 ColorMode.Library => Classifier.DisplayName((Library)value),
                 _ => ImageFormats.DisplayName((ImageFormat)value),
@@ -1463,7 +1476,7 @@ public partial class MainWindow : Window
                 Theme.Key.Unreadable => 3,
                 Theme.Key.Online => 4,
                 _ => 5,
-            }),
+            }).ThenBy(kv => kv.Key.Item2),
             _ => sizes.OrderBy(kv => kv.Key.Item1 != Theme.Key.Slot).ThenByDescending(kv => kv.Value),
         };
         return ordered
@@ -1851,6 +1864,14 @@ public partial class MainWindow : Window
             lines.Add($"{Format.Count(others.Count, "other copy", "other copies")}: {others[0].FullPath}" +
                       (others.Count > 1 ? $" (+ {Format.Count(others.Count - 1)} more)" : "") +
                       (group.ByFingerprint ? "  ·  matched by fingerprint (memory card)" : ""));
+        }
+        else if (node.SameShot is { } same)
+        {
+            bool onCard = CardSync.IsCard(node.Drive);
+            string why = node.Photo is { } a && same.Photo is { } b && (a.Rating != b.Rating || a.Tags != b.Tags)
+                ? "the rating or tags differ, and rating or tagging in Windows rewrites the file"
+                : "probably edited, rotated or re-saved";
+            lines.Add($"Same shot {(onCard ? "in the archive" : "on the card")}, but the files differ ({why}): {same.FullPath}");
         }
         else
             lines.Add(node.Dup switch

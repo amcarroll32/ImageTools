@@ -269,6 +269,7 @@ public static class Theme
             ColorMode.Duplicates => file.Dup switch
             {
                 DupStatus.Duplicate => (Key.Slot, 0),
+                DupStatus.Unique when file.SameShot != null => (Key.Slot, 1), // the next slot: same shot, files differ
                 DupStatus.Unique => (Key.Unique, 0),
                 DupStatus.Unreadable => (Key.Unreadable, 0),
                 _ => (Key.Pending, 0),

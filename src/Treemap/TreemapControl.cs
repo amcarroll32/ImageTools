@@ -733,5 +733,14 @@ public sealed class TreemapControl : FrameworkElement
                     dc.DrawRectangle(Theme.SelectWash, Theme.TargetPen, box);
             }
         }
+
+        // So does the same shot on the other end of a card pairing.
+        var sameShot = (_hover ?? _selected)?.SameShot;
+        if (sameShot != null && sameShot != _hover && sameShot != _selected && _rects.TryGetValue(sameShot, out var shotRect))
+        {
+            var box = Inset(shotRect, 1);
+            if (!box.IsEmpty)
+                dc.DrawRectangle(Theme.SelectWash, Theme.TargetPen, box);
+        }
     }
 }

@@ -88,5 +88,21 @@ var (a6, _, _) = Run(choose0);
 Check(a6 is { Source: ArchiveSource.Matched } && a6.Archive == archive, "no serial: choice ignored, automatic match used");
 Check(!CardSync.CanRemember(card), "no serial: can't remember");
 
+// 7. Same shot, files differ: same name in the archive, same date taken and dimensions, not byte-identical.
+card.VolumeSerial = 0x1234ABCD;
+var shot = new PhotoInfo(new DateTime(2025, 5, 17, 10, 0, 0).Ticks, "Canon EOS 60D", 5184, 3456, 0, null, 1);
+cardImages[4].Photo = shot;
+var rated = Img(archive, "p5.jpg", 5);
+rated.Photo = shot with { Rating = 4 };
+cardImages[5].Photo = shot with { DateTaken = shot.DateTaken + TimeSpan.TicksPerSecond };
+Img(archive, "p6.jpg", 6).Photo = shot;                                // same name, taken a second apart: a different photo
+cardImages[0].Photo = shot;
+archive.Children!.First(f => f.Name == "p1.jpg").Photo = shot;         // byte-identical already: not "same shot"
+var shots = CardSync.SameShots(Run(None()).S).ToList();
+Check(shots.Count == 1 && shots[0] == (cardImages[4], rated), "same name + same shot + different bytes is found");
+Check(CardSync.IsSameShot(cardImages[4], rated) && !CardSync.IsSameShot(cardImages[5], archive.Children!.First(f => f.Name == "p6.jpg")),
+    "a second apart isn't the same shot");
+Check(!CardSync.IsSameShot(cardImages[4], Img(backup, "x.jpg", 1)), "no details: never the same shot");
+
 Console.WriteLine(fails == 0 ? "ALL PASSED" : $"{fails} FAILED");
 return fails;

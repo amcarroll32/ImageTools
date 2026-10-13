@@ -257,6 +257,34 @@ public static class CardSync
         return new CardFolder(folder, archivePath, archive, source, shared.Count, cutoff, items);
     }
 
+    /// <summary>
+    /// Card images whose archive folder holds a file with the same name that's the same shot but not
+    /// byte-identical: typically rated, tagged or edited after the import, which rewrites the file.
+    /// </summary>
+    public static IEnumerable<(FsNode Card, FsNode Archive)> SameShots(CardStatus status)
+    {
+        foreach (var folder in status.Folders.Where(f => f.Archive != null))
+        {
+            var archived = new Dictionary<string, FsNode>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in Images(folder.Archive!))
+                archived.TryAdd(f.Name, f);
+            foreach (var img in Images(folder.Folder))
+            {
+                if (archived.TryGetValue(img.Name, out var other) && (img.Group == null || img.Group != other.Group) && IsSameShot(img, other))
+                    yield return (img, other);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Same date taken (to the second), same dimensions and, when both record one, the same camera.
+    /// Images without a date taken or dimensions can't be told apart this way, so they never match.
+    /// </summary>
+    public static bool IsSameShot(FsNode a, FsNode b) =>
+        a.Photo is { DateTaken: > 0, Width: > 0, Height: > 0 } p && b.Photo is { } q
+        && p.DateTaken == q.DateTaken && p.Width == q.Width && p.Height == q.Height
+        && (p.Camera == null || q.Camera == null || p.Camera == q.Camera);
+
     /// <summary>The folder at <paramref name="path"/> in the scanned tree, or null if it isn't there (or holds no images).</summary>
     public static FsNode? FindByPath(IReadOnlyList<FsNode> drives, string path)
     {

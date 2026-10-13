@@ -73,6 +73,13 @@ public sealed class FsNode
     public DupStatus Dup { get; set; }
     public DuplicateGroup? Group { get; set; }
 
+    /// <summary>
+    /// A card image and the file with the same name in its archive folder, when they're the same shot
+    /// (same date taken, dimensions and camera) but not byte-identical, e.g. rated or edited since the
+    /// import. Set on both ends, each pointing at the other.
+    /// </summary>
+    public FsNode? SameShot { get; set; }
+
     /// <summary>Date taken, camera, tags… read from Windows' property system. Null until read.</summary>
     public PhotoInfo? Photo { get; set; }
 
