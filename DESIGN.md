@@ -8,6 +8,12 @@ though it shares no code with it.
 The values below are copied from Disk Visualizer v1.2.0. If the two ever disagree, the reference
 app wins; update this file to match it.
 
+Image Tools (this repo) has since added patterns of its own, mainly around changing files safely:
+review windows that go Select → Preview changes → Apply, before/after previews, link buttons,
+grouped checkboxes and ordered layouts for the canvas. They're written into the sections below so
+the next app can reuse them. Notes that only apply to Image Tools start with **Image Tools:**.
+Last brought up to date on 13 Oct 2026.
+
 ---
 
 ## 1. Intent
@@ -19,6 +25,12 @@ from these.
    doesn't change the user's files unless that is the app's stated job, and then only when the user
    asks. If the app can't safely do something, it explains how the user can do it themselves
    (Disk Visualizer's *Space hogs* say how to reclaim space but never delete anything).
+   **Every change to files is previewed first:** the user selects, then sees a *Preview changes*
+   list of every operation (each folder created, each copy with its final name, each rename and
+   why), and only *Apply* makes them. A one-click confirmation is not enough. Changes are verified
+   and logged, never overwrite or delete anything, and give a taken name a “ (2)” suffix instead.
+   A settings change with real consequences (such as which folder a card imports into) gets a
+   before/after preview too.
 2. **One portable exe.** There is no installer, nothing to set up, and no runtime to install. It
    runs as a normal user. Admin rights, if they help at all, are an optional one-click restart that
    explains what changes.
@@ -47,6 +59,7 @@ from these.
 | Elevation | `asInvoker` in the manifest; never require admin |
 | DPI / paths | `PerMonitorV2` DPI awareness, `longPathAware` |
 | Settings | `<AppName>.settings.json` **next to the exe**, so settings travel with the app. If that folder isn't writable, fall back to `%LocalAppData%\<AppName>\settings.json`. If saving fails both ways, carry on without telling the user. |
+| Caches and logs | Next to the exe as well, with the same fallback: `<AppName>.cache`, and a `<AppName> logs\` folder with one log per file-changing run. A cache is keyed per file on path, size and modified date, so a rescan only reads what changed. |
 | Network | None. Don't check for updates and don't send telemetry. |
 
 ### `.csproj` baseline
@@ -165,6 +178,15 @@ Slot 9 (grey) is always "Other". The palette is stepped separately for each them
 type→color mapping as above (for example, images are always orange). If its categories are
 unrelated to file types, it starts again at slot 1.
 
+**Image Tools:** every item is an image, so its color modes start again at slot 1:
+
+| Color mode | Colors |
+|---|---|
+| Duplicates | Slot 1 blue: has a byte-identical copy elsewhere. Slot 2 orange: a card photo and the same-named file in its archive folder are the same shot (date taken, dimensions, camera) but not identical. No copies: the aggregated grey `#5e5d58` / `#b4b3ac`, cushioned. Not checked yet: flat `#3b3b37` / `#dcdbd4`. Unreadable and online-only: the unknown hatch. App assets: the empty hatch. |
+| Library | Slots in the order of the `Library` enum (camera folders first). |
+| Format | Slots in the order of the `ImageFormat` enum. |
+| Date | The ordinal ramp, by date taken (else modified). |
+
 ### 3.4 Ordinal ramp (5 steps, single blue hue)
 
 This ramp is for ordered values such as age, size bands or ratings. Five steps is the most a
@@ -193,6 +215,9 @@ so the ramp runs the opposite way in each theme:
 | Empty / free | hatch `#2a2a28` + `#383835` at 45° | hatch `#f3f2ee` + `#dcdbd4` at 45° | Something that *isn't there* |
 | Unknown / unreadable | hatch `#3a3533` + `#5a4f4b` at 135° | hatch `#ece4e1` + `#cdbfb9` at 135° | Something that is there but can't be seen |
 | Dimmed (doesn't match a filter) | `#2a2a28` | `#eeede9` | Flat, no label |
+| Not processed yet | `#3b3b37` | `#dcdbd4` | Flat; for items a background pass hasn't reached |
+| Source group frame and title band | frame `#3987e5`, band `#1f2d40` | frame `#2a78d6`, band `#e1ecfb` | Accent fill and Badge background: a group that's the origin of other data (Image Tools: a camera card whose photos are archived) |
+| Linked container header | `#1f2d40` strip, note in `#6da7ec` | `#e1ecfb` strip, note in `#1c5cab` | Both ends of a pairing, with a note naming the other end ("archived in E:\…\100CANON", "archive of card I:") |
 
 **Cushion:** every solid data fill is drawn as a linear gradient from 18% toward white (top-left) to
 18% toward black (bottom-right), so neighboring same-colored blocks still read as separate.
@@ -213,6 +238,7 @@ contrast ratio.
 | Hover target (the container a click will open) | 2px `#6da7ec` | 2px `#2a78d6` |
 | Selected | 2px `#fab219` outline + `#40fab219` wash | 2px `#c98500` outline + `#40eda100` wash |
 | Search match | 1.5px `#f0efec` outline | 1.5px `#0b0b0b` outline |
+| Related item (another copy of the hovered or selected item, or its same-shot counterpart) | 2px `#6da7ec` + `#40fab219` wash | 2px `#2a78d6` + `#40eda100` wash |
 
 Overlays are inset 1px and drawn on a separate layer, so hover and selection redraw without
 re-laying out the data.
@@ -243,6 +269,10 @@ re-laying out the data.
 | Canvas group stats | 11 | Regular | Secondary |
 | Canvas container header | 11: name SemiBold, then two spaces, then size in Muted | | Primary + Muted |
 | Canvas item label / item size | 11 (SemiBold for real items) / 10.5 | | Contrast ink |
+| Dialog and review-window title | 20 | SemiBold | Primary |
+| Review-list folder heading | 15 | SemiBold | Primary |
+| Review-list group heading ("NEW SINCE THE LAST IMPORT (33)") | 11, **ALL CAPS** | SemiBold | Muted |
+| Link button | 12 | Regular | Accent |
 
 ---
 
@@ -271,6 +301,21 @@ dropdown chevron.
 | Warning triangle | `E814` | Alert (paired with a label) |
 | Sun / Moon | `E706` / `E708` | Theme toggle. **The button shows the mode you'd switch to.** |
 | Gear | `E713` | Settings menu (rightmost in the toolbar, next to the theme toggle) |
+| Chevron right | `E76C` | Breadcrumb separator (10, Muted) |
+| Check mark | `E73E` | Good state, paired with a label: "Archived", "Same images", copied and verified |
+| Warning | `E7BA` | Warning rows in lists, menus and dialogs: a skipped copy, "Full rescan…" |
+| Info | `E946` | Neutral note in a preview; "No archive folder found" |
+| Cancel | `E711` | Rule something out ("Not the archive"); a copy that failed |
+| Restore | `E777` | Go back to the automatic choice |
+| Download | `E896` | New items to import (canvas badge, import card) |
+| Picture | `E8B9` | Open image |
+| Go | `E8AD` | Go to another copy |
+| New folder | `E8F4` | Create folder (in a preview) |
+| Document | `E8A5` | Sidecar file that travels with an image (in a preview) |
+| Archive folder | `E8DE` | Change or choose an archive folder |
+
+Both warning glyphs are in use today: `E814` on the canvas and in the pairing preview, `E7BA` in
+lists, menus and the confirm dialog. Settle on one the next time either is touched.
 
 ---
 
@@ -304,6 +349,11 @@ dropdown chevron.
 | Tooltip | padding `12,9`, max width 440, radius 6, 1px border |
 | Status bar padding | `12,6` |
 | Window | 1440×900 default, minimum 1200×560, centered on screen |
+| Split button chevron | padding `7,6`, no gap to its main button |
+| Review window (Image Tools: Import) | 1320×780, minimum 1040×520, centered on its owner; header padding `16,14`, footer padding `16,10`, both with a hairline |
+| Compare panel | 560 wide, docked right in the review window, 1px hairline on its left; previews 190 tall on `BarTrack`, radius 4 |
+| Small dialog | 520 wide (confirm) or 640 (before/after preview); height sizes to content; no resize; not in the taskbar; body margin `20,18,20,16`; button bar padding `20,12` with a hairline above |
+| Link button | padding `4,2`, radius 4, 12 apart in a wrap panel |
 
 ---
 
@@ -311,13 +361,14 @@ dropdown chevron.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ [↑] [⟳ Rescan] [▭ Drives ▾] [⛉ Run as admin]  Breadcrumbs ›   12 files  ·  4 GB  │
-│                                      [🔍 Search: …] [Color: Type ▾] [☑ Opt] [☾] │
+│ [↑] [⟳ Scan for new][▾] [▭ Drives ▾] [⛉ Run as admin]  Breadcrumbs ›  12 files │
+│        [🔍 Search: …] [Sort: Size ▾] [Color: Type ▾] [☑ Opt] [☾] [⚙]            │
 ├──────────────────────────────────────────────────────────────┬───────────────┤ hairline
 │                                                              │ View title    │
 │                                                              │ subtitle      │
 │              Main canvas / visualization                     │ ▬▬▬▬▬▬▬░░░░   │
-│              (fills all remaining space)                     │ Tab Tab Tab   │
+│              (fills all remaining space)                     │ [action card] │
+│                                                              │ Tab Tab Tab   │
 │                                                              │ rows…         │
 │                                                              │───────────────│ hairline
 │                                                              │ LEGEND        │
@@ -331,18 +382,21 @@ dropdown chevron.
 
 - **Toolbar** is a `DockPanel`. Navigation and actions are docked left; breadcrumbs fill the middle
   (a horizontal `ScrollViewer` with the scrollbar hidden). View controls are docked right, in this
-  order from the far right: theme toggle, toggles (`CheckBox`), mode `ComboBox` (labelled
-  "*Name: Value*", such as "Color: Type"), search box, and the search result summary in Secondary
-  ink.
+  order from the far right: settings gear, theme toggle, toggles (`CheckBox`), mode `ComboBox`es
+  (each labelled "*Name: Value*", such as "Color: Type" then "Sort: Size" to its left), search box,
+  and the search result summary in Secondary ink. Mode boxes are 150–170 wide.
 - **Search box** is 270 wide. A muted magnifier glyph sits inside the left edge (text padding
-  `32,5,8,6`), and a muted placeholder that gives examples ("Search: name, \*.mp4, .iso") hides once
-  the user types.
+  `32,5,8,6`), and a muted placeholder that gives examples ("Search: name, \*.mp4, .iso"; Image
+  Tools: "Search: name, IMG_\*.jpg, .heic") hides once the user types.
 - **Breadcrumbs** are transparent flat buttons (padding `8,4`, hand cursor).
 - **Side panel**, top to bottom:
   - a title for the current view (20 SemiBold);
   - a one- or two-line subtitle with the key numbers;
   - an optional capacity bar;
-  - a `TabControl` with transparent background and no border;
+  - optional action cards for something that needs the user (Image Tools: one per camera card,
+    with "Review import…");
+  - a `TabControl` with transparent background and no border (Image Tools: Contents, Duplicates,
+    Matches, Libraries, with counts in the headers once known);
   - a legend docked to the bottom.
 - **Status bar:** on the left, Secondary ink, what just happened or what is in progress. On the
   right, Muted ink, the main mouse and keyboard shortcuts.
@@ -355,6 +409,15 @@ dropdown chevron.
 Icon-only buttons are fine when the glyph is universal (up, theme), but they must have a tooltip
 that includes the shortcut, such as "Up one level (Backspace)". A button that opens a menu adds a
 10px `E70D` chevron after the label.
+
+**Split button.** A main action with its variants on a separate chevron-only button right next to
+it (padding `7,6`, no gap), opening a menu: "Scan for new" ▾ → "Scan for new", "Full
+rescan…". The main button does the everyday, cheap thing; the costly variant is in the menu and
+asks first.
+
+**Settings gear.** An icon-only `E713` button, rightmost in the toolbar. It opens a `ContextMenu`
+below itself holding the app's options and settings. Options move into it from the toolbar over
+time; until something has, it shows one disabled line ("No settings here yet").
 
 **Status badge.** Shows a state rather than an action, such as "Administrator". It is a `Border`
 with `BadgeBg`, radius 4, padding `10,5`, and a glyph plus text in `AccentInk`. It replaces the
@@ -387,6 +450,19 @@ column. It sits under an ALL-CAPS heading such as "SPACE BY TYPE".
 **Link row.** A flat, full-width button in Accent ink with radius 4 and padding `4,2`. It gets a
 `LinkHover` fill on mouse-over, uses 11px text, and puts a Muted size on the right.
 
+**Link button.** A text-only action inside a heading, such as "Change archive folder…", "Not the
+archive", "Let Image Tools choose". Accent ink, 12px, padding `4,2`, radius 4, `LinkHover` fill on
+mouse-over, in a wrap panel 12 apart. Disabled, it turns Muted and keeps a tooltip saying why
+(`ToolTipService.ShowOnDisabled`). Only the actions that make sense for that item are shown.
+
+**Grouped checkboxes.** In a long list to tick from, every heading has its own checkbox that ticks
+or unticks everything under it, and shows the indeterminate state when only some are ticked. A
+heading with nothing under it hides its checkbox. A folder heading is 15 SemiBold, then an 11 Muted
+path line ("source  →  target"), a 12 Secondary note, and its link buttons. A group heading is 11
+ALL-CAPS SemiBold Muted with its count, such as "OLDER, NOT IN THE ARCHIVE (33)", then an 11 Muted
+line saying what the group is and whether it's ticked by default. The list is virtualizing and has
+no selection highlight; the row being compared gets a `LinkHover` fill.
+
 **Tooltip** (custom, following the mouse over the canvas; not the system tooltip). From top to
 bottom:
 - title, 13 SemiBold;
@@ -397,7 +473,49 @@ bottom:
 
 **Context menu.** A Fluent `ContextMenu` whose items each have a 14px glyph as their `Icon`.
 Headers are sentence case and quote names with curly quotes: Zoom into “Games”. It offers the
-likely next step first and the Explorer and copy actions after.
+likely next step first and the Explorer and copy actions after, then actions on related items
+(Image Tools: archive pairing, then "Go to copy in …"), each group after a separator.
+
+**Review window** (Select → Preview changes → Apply), for any action that changes files. One
+window, its body swapped per step; the title and subtitle in the header and the buttons in the
+footer change with it. The footer's left side is a Muted note on what to do next or why a button
+is disabled.
+1. *Select.* The grouped-checkbox list, with the suggested items already ticked and the rest
+   listed but not ticked, plus a "Select all" for the full sync. A summary on the right reads "33
+   of 35 images selected  ·  241 MB". Buttons: Cancel, **Preview changes** (default, disabled
+   until something is ticked).
+2. *Preview changes.* Summary lines first: what will happen in Primary ("Copy 33 images and 2
+   sidecar files (241 MB)."), renames in Accent, free space in Secondary, or in Warning or
+   Critical with the reason when it's short or unknown, and a last line on what won't change
+   ("Nothing on the card is changed or deleted. Nothing in the archive is overwritten."). Then one
+   row per change with a glyph: Create folder, then every copy as "name  →  target" with a Muted
+   detail line and any rename note in Accent. Buttons: Back, Copy report (the same list as plain
+   text), **Apply – copy 35 files** (disabled when it can't succeed, such as no space).
+3. *Apply.* Progress in place (bar and "Copying 4 of 35 files…  12 MB of 241 MB"), results added
+   as they finish. Stop finishes the current file and removes its partial copy; closing the window
+   does the same. Then a summary of what happened, the bar colored by the worst outcome, results
+   with problems first, the log's path, and Open log / Close.
+
+**Before/after preview.** A small dialog for a change to a setting with consequences, such as
+which folder a card folder is archived to. Heading (20 SemiBold, also the window title), one
+Secondary line naming the item, then two cards side by side: **NOW** (Muted label) and **AFTER**
+(Accent label, `AccentFill` border). Each card has the value in SemiBold and a 12 Secondary line
+on how it was decided and what it means ("Found automatically: it holds the same photos. 877 of
+910 images are already there. An import would list 33 older."). Below that come notes, each with a
+glyph: info in Secondary, a warning in Warning, and a blocker in Critical, which also hides the
+confirm button. A Muted footnote says what doesn't change. Cancel is the default; the confirm
+button names the result ("Use this folder", "Rule it out", "Go back to automatic").
+
+**Confirm dialog.** For something slow or costly, such as a full rescan. Heading, Secondary
+message, an optional card with a warning glyph and SemiBold text, then Cancel and a confirm button
+that names the action. **Cancel is the default button**, so Enter never starts it by accident.
+
+**Compare panel.** Two items side by side in the review window, to help decide. Column labels
+in 11 ALL-CAPS SemiBold: the source in Accent ("ON THE CARD"), the other in Muted ("IN THE
+ARCHIVE, SAME NAME"). Previews 190 tall on `BarTrack`, loaded only for the clicked row, with a
+placeholder that says why there's no picture. Under each, detail lines; **a value that differs
+from the other side is drawn in Accent SemiBold on both sides.** Then a one-line SemiBold verdict
+in plain words ("Same shot – the archive copy has a different rating or tags…").
 
 **Progress.** Show it in place, where the result will appear: a 4px rounded bar on the progress
 track with "Scanning… 42%" in Secondary 12 above it. Avoid modal progress dialogs.
@@ -431,6 +549,22 @@ These apply when the app has a main visualization:
   Right-click opens the context menu. Hovering a container shows the Target outline; hovering a
   leaf shows the Hover outline.
 - Show the space nothing occupies (free, unknown) with hatches, so totals add up to the real whole.
+- **Sort modes**, chosen in a "Sort: …" box next to Color:
+  - *Size* (the default): areas are bytes, squarified, largest first.
+  - *Name* and *Date*: every leaf gets the same area, so a container's area counts its items. A
+    container's own leaves fill a grid of equal cells in reading order (left to right, top to
+    bottom; as many columns as keeps the cells closest to square; the last row may be part empty).
+    Containers come first, laid out with an ordered strip treemap in rows down a tall area or
+    columns across a wide one. Names sort as Explorer does (IMG_2 before IMG_10); dates sort by date
+    taken (else modified), then name, and a container by its oldest item.
+  - In count modes, container headers show the count ("910 images") instead of the size, and a
+    leaf's second line shows its date when sorted by date.
+  - The side panel's list follows the canvas order; its sizes and percentages stay in bytes.
+- Hovering an item outlines the items related to it (its copies, or its same-shot counterpart)
+  wherever they are on screen, with the Related overlay.
+- A group can carry a badge in its title band, after the name and any alert: a 13px glyph and 12
+  SemiBold text, in Accent for something to do ("33 new to import") or with a Good check mark and
+  Primary text for done ("Archived").
 
 ---
 
@@ -443,14 +577,16 @@ These apply when the app has a main visualization:
 | Backspace, mouse back button | Up one level |
 | Ctrl+F | Focus search |
 | Esc (in search) | Clear search |
-| F5 | Rescan / reload |
+| F5 | Rescan / reload (Image Tools: Scan for new, which only reads new and changed files) |
+| Ctrl+F5 | Image Tools: Full rescan, which asks first and says roughly how much it will read |
 | Double-click a list row | Go to it on the canvas |
 
 The status bar's right side spells out the most important ones, such as
 `Click: zoom in  ·  Right-click: options  ·  Backspace: up  ·  Ctrl+F: search  ·  F5: rescan`.
 
 Remember view preferences (theme, include/exclude choices) silently. Don't remember transient state
-such as the search text or zoom level.
+such as the search text or zoom level. Image Tools also remembers the user's corrections (archive
+folders chosen or ruled out per card). It doesn't remember Color or Sort yet.
 
 ---
 
@@ -470,6 +606,12 @@ such as the search text or zoom level.
 - **Errors** start with "Couldn't …:" and then the system message. Cancellations say what state the
   app is still in: "Administrator restart was cancelled; still running as a normal user."
 - **Empty states** say why the list is empty: "Nothing here matches the search."
+- **Arrows** `→` with two spaces each side show a source and its target: "100CANON  →  E:\…\Card2\100CANON".
+- **Buttons that change something name the result**, with the count: "Apply – copy 35 files",
+  "Use this folder", "Rule it out". Wherever files could change, say plainly what won't:
+  "Nothing on the card is changed or deleted. Nothing in the archive is overwritten."
+- **Say how something was decided** when the app chose for the user: "Found automatically",
+  "Remembered from an earlier scan of this card", "Chosen by you".
 
 ### Number formats (current culture)
 
@@ -561,12 +703,15 @@ Every app in the family uses the same tile with a different motif inside.
 ```
 App.xaml(.cs)            Theme + settings bootstrap
 MainWindow.xaml(.cs)     Toolbar, side panel, tooltips, navigation
+<Name>Window.xaml(.cs)   Other windows: review windows, previews, confirm dialogs
 src/Model/               Pure data and formatting (Format.cs lives here)
-src/Platform/            Windows specifics: settings, elevation, OS queries
+src/Platform/            Windows specifics: settings, cache, elevation, OS queries, file changes
+src/Scanning/            Background scanning and analysis
 src/<Visual>/            Custom drawing control + Theme.cs
+tests/<Name>Test/        Console test harnesses referencing the app project; `dotnet run` from their folder
 tools/make-icon.ps1      Icon generator
 Assets/app.ico
-docs/screenshot.png      Used by the README
+docs/screenshot*.png     Used by the README
 Properties/PublishProfiles/Portable.pubxml
 ```
 
@@ -596,5 +741,8 @@ Properties/PublishProfiles/Portable.pubxml
 - [ ] Shortcuts listed in the status bar; Backspace / Ctrl+F / Esc / F5 behave as described
 - [ ] Numbers formatted as in §11
 - [ ] Portable single-file exe, `asInvoker`, settings next to the exe, no network
+- [ ] Every file-changing action goes Select → Preview changes → Apply; changes are verified and logged, never overwrite or delete
+- [ ] Dialogs default to Cancel; confirm buttons name the result
+- [ ] Settings gear at the right end of the toolbar
 - [ ] Icon on the shared tile, generated by script
 - [ ] README follows the house structure and tone
