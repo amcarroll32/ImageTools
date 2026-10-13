@@ -2271,6 +2271,18 @@ public partial class MainWindow : Window
         RefreshCards();
     }
 
+    /// <summary>The settings menu. Options will move here from the toolbar over time; it's empty for now.</summary>
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu
+        {
+            PlacementTarget = SettingsButton,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+        };
+        menu.Items.Add(new MenuItem { Header = "No settings here yet", IsEnabled = false });
+        menu.IsOpen = true;
+    }
+
     private void ApplyThemeResources()
     {
         // The button shows the mode you'd switch to.

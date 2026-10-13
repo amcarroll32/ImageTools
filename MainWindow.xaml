@@ -213,6 +213,10 @@
                     </StackPanel>
                 </Border>
 
+                <Button x:Name="SettingsButton" DockPanel.Dock="Right" Click="Settings_Click" Padding="10,6" Margin="6,0,0,0"
+                        ToolTip="Settings" AutomationProperties.Name="Settings">
+                    <TextBlock FontFamily="{StaticResource Icons}" FontSize="14" Text="&#xE713;" />
+                </Button>
                 <Button x:Name="ThemeButton" DockPanel.Dock="Right" Click="Theme_Click" Padding="10,6" Margin="10,0,0,0">
                     <TextBlock x:Name="ThemeGlyph" FontFamily="{StaticResource Icons}" FontSize="14" Text="&#xE708;" />
                 </Button>

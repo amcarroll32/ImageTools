@@ -270,6 +270,7 @@ dropdown chevron.
 | Copy | `E8C8` | Copy path |
 | Warning triangle | `E814` | Alert (paired with a label) |
 | Sun / Moon | `E706` / `E708` | Theme toggle. **The button shows the mode you'd switch to.** |
+| Gear | `E713` | Settings menu (rightmost in the toolbar, next to the theme toggle) |
 
 ---
 
