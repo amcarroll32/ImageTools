@@ -227,6 +227,13 @@
                     <ComboBoxItem Content="Color: Format" />
                     <ComboBoxItem Content="Color: Date" />
                 </ComboBox>
+                <ComboBox x:Name="SortBox" DockPanel.Dock="Right" Width="150" Margin="10,0,0,0" VerticalAlignment="Center"
+                          SelectionChanged="Sort_Changed"
+                          ToolTip="Size: boxes sized by bytes on disk, largest first. Name or Date taken: every image the same size, in order. Images read left to right, top to bottom; folders follow each other in rows or columns.">
+                    <ComboBoxItem Content="Sort: Size" IsSelected="True" />
+                    <ComboBoxItem Content="Sort: Name" />
+                    <ComboBoxItem Content="Sort: Date taken" />
+                </ComboBox>
                 <Grid DockPanel.Dock="Right" Width="270" Margin="10,0,0,0" VerticalAlignment="Center">
                     <TextBox x:Name="SearchBox" Padding="32,5,8,6" VerticalContentAlignment="Center"
                              TextChanged="SearchBox_TextChanged" PreviewKeyDown="SearchBox_PreviewKeyDown"

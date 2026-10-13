@@ -13,6 +13,17 @@ public enum ColorMode
 }
 
 /// <summary>
+/// How boxes are sized and ordered: by bytes (largest first, squarified), or one unit per image,
+/// ordered by name or by date taken, so every photo gets the same size and they read in order.
+/// </summary>
+public enum MapSort
+{
+    Size,
+    Name,
+    Date,
+}
+
+/// <summary>
 /// All app colors for the light and dark themes, matching Disk Visualizer (see DESIGN.md).
 /// Category colors are the validated categorical slots (CVD-checked in this order, stepped
 /// separately for each surface); dates use a validated single-hue ordinal ramp.

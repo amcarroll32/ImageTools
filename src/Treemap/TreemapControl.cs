@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -16,9 +17,11 @@ internal sealed class LayoutItem(FsNode node, Rect rect)
 }
 
 /// <summary>
-/// Nested squarified treemap of image space. Folders are drawn as framed boxes with a title
-/// strip; images are colored by the current <see cref="ColorMode"/>. Everything is drawn into one DrawingVisual, with
-/// hover/selection outlines on a second visual so they redraw without re-laying out.
+/// Nested treemap of images. Sorted by size it's squarified by bytes; sorted by name or date every
+/// image gets the same size, images fill a grid in reading order and folders are laid out in strips,
+/// in order. Folders are drawn as framed boxes with a title strip; images are colored by the current
+/// <see cref="ColorMode"/>. Everything is drawn into one DrawingVisual, with hover/selection outlines
+/// on a second visual so they redraw without re-laying out.
 /// </summary>
 public sealed class TreemapControl : FrameworkElement
 {
@@ -46,6 +49,9 @@ public sealed class TreemapControl : FrameworkElement
     private double _pixelsPerDip = 1;
     private int _labelBudget;
     private ColorMode _colorMode;
+    private MapSort _sort;
+    private readonly Dictionary<FsNode, long> _firstDates = new();
+    private double _bytesPerImage;
     private SearchMatcher? _filter;
     private IReadOnlySet<FsNode>? _filterTrail;
     private long _nowTicks;
@@ -108,6 +114,16 @@ public sealed class TreemapControl : FrameworkElement
         }
     }
 
+    public MapSort Sort
+    {
+        get => _sort;
+        set
+        {
+            _sort = value;
+            Invalidate();
+        }
+    }
+
     /// <summary>When set, everything that doesn't match (and isn't inside a match) is dimmed.</summary>
     public SearchMatcher? Filter
     {
@@ -152,8 +168,69 @@ public sealed class TreemapControl : FrameworkElement
         return folder == _root ? null : folder;
     }
 
+    /// <summary>
+    /// <paramref name="nodes"/> in the map's order: largest first by size; otherwise folders first,
+    /// then images, each by name (as Explorer sorts them) or by date taken (a folder by its oldest image).
+    /// </summary>
+    public IEnumerable<FsNode> Order(IEnumerable<FsNode> nodes) => _sort switch
+    {
+        MapSort.Size => nodes.OrderByDescending(DisplaySize),
+        MapSort.Name => nodes.OrderBy(n => !n.IsContainer).ThenBy(n => n.DisplayName, NaturalOrder.Instance),
+        _ => nodes.OrderBy(n => !n.IsContainer).ThenBy(n => FirstDate(n) is > 0 and var d ? d : long.MaxValue)
+            .ThenBy(n => n.DisplayName, NaturalOrder.Instance),
+    };
+
+    /// <summary>Date taken (else modified) of an image, or of the oldest visible image in a folder; 0 when unknown.</summary>
+    private long FirstDate(FsNode node)
+    {
+        if (node.Kind == NodeKind.File)
+            return node.DateTicks;
+        if (_firstDates.TryGetValue(node, out long known))
+            return known;
+        long first = long.MaxValue;
+        foreach (var c in node.Children ?? [])
+        {
+            if (c.Kind == NodeKind.File && c.IsAsset && !_showAssets)
+                continue;
+            long d = FirstDate(c);
+            if (d > 0 && d < first)
+                first = d;
+        }
+        return _firstDates[node] = first == long.MaxValue ? 0 : first;
+    }
+
+    /// <summary>What sizes a box: its bytes, or when sorted by name or date one unit per image.</summary>
+    private double Weight(FsNode node)
+    {
+        if (_sort == MapSort.Size)
+            return DisplaySize(node);
+        if (node.Kind == NodeKind.File)
+            return node.IsAsset && !_showAssets ? 0 : 1;
+        if (node.Kind == NodeKind.Drive && node.IsScanning)
+            return node.PendingSize / BytesPerImage(); // images aren't counted until the scan finishes
+        return node.VisibleCount(_showAssets);
+    }
+
+    /// <summary>Average image size across finished drives, to size a drive that's still scanning.</summary>
+    private double BytesPerImage()
+    {
+        if (_bytesPerImage > 0)
+            return _bytesPerImage;
+        long bytes = 0, count = 0;
+        foreach (var d in (_root?.Kind == NodeKind.Root ? _root.Children : null) ?? [])
+        {
+            if (d.IsScanning)
+                continue;
+            bytes += d.VisibleSize(_showAssets);
+            count += d.VisibleCount(_showAssets);
+        }
+        return _bytesPerImage = count > 0 && bytes > 0 ? (double)bytes / count : 3_000_000;
+    }
+
     public void Invalidate()
     {
+        _firstDates.Clear();
+        _bytesPerImage = 0;
         if (_renderQueued)
             return;
         _renderQueued = true;
@@ -274,6 +351,8 @@ public sealed class TreemapControl : FrameworkElement
         _scale = dpi.DpiScaleX;
         _pixelsPerDip = dpi.PixelsPerDip;
         _rects.Clear();
+        _firstDates.Clear();
+        _bytesPerImage = 0;
         _labelBudget = MaxLabels;
         _nowTicks = DateTime.UtcNow.Ticks;
 
@@ -333,23 +412,124 @@ public sealed class TreemapControl : FrameworkElement
             return false;
 
         var visible = new List<FsNode>(Math.Min(children.Count, 512));
-        long total = 0;
+        double total = 0;
         foreach (var c in children)
         {
-            long size = DisplaySize(c);
-            if (size <= 0)
+            double weight = Weight(c);
+            if (weight <= 0)
                 continue;
             visible.Add(c);
-            total += size;
+            total += weight;
         }
         if (total == 0)
             return false;
 
-        // Hiding app assets changes sizes, so the order can change.
-        visible.Sort((a, b) => DisplaySize(b).CompareTo(DisplaySize(a)));
+        void Emit(FsNode node, Rect rect) => DrawNode(dc, parent, node, rect, depth, lit);
+        if (_sort == MapSort.Size)
+        {
+            // Hiding app assets changes sizes, so the order can change.
+            visible.Sort((a, b) => DisplaySize(b).CompareTo(DisplaySize(a)));
+            Squarify(visible, (long)total, area, Emit);
+            return true;
+        }
 
-        Squarify(visible, total, area, (node, rect) => DrawNode(dc, parent, node, rect, depth, lit));
+        // In order: folders in strips, then the folder's own images as one block, drawn as a grid.
+        var ordered = Order(visible).ToList();
+        var images = ordered.Where(n => !n.IsContainer).ToList();
+        var boxes = ordered.Where(n => n.IsContainer).Select(n => (Node: (FsNode?)n, Weight: Weight(n))).ToList();
+        if (boxes.Count == 0)
+        {
+            Grid(images, area, Emit);
+            return true;
+        }
+        if (images.Count > 0)
+            boxes.Add((null, images.Count));
+        Strips(boxes, area, (node, rect) =>
+        {
+            if (node != null)
+                Emit(node, rect);
+            else
+                Grid(images, rect, Emit);
+        });
         return true;
+    }
+
+    /// <summary>
+    /// Equal cells in reading order, left to right and top to bottom, with as many columns as keeps
+    /// them closest to square. The last row may be part empty.
+    /// </summary>
+    private static void Grid(List<FsNode> items, Rect area, Action<FsNode, Rect> emit)
+    {
+        int n = items.Count;
+        if (n == 0 || area.Width < 0.5 || area.Height < 0.5)
+            return;
+        int guess = (int)Math.Round(Math.Sqrt(n * area.Width / area.Height));
+        int cols = 1;
+        double best = double.MaxValue;
+        for (int c = Math.Max(1, guess - 1); c <= Math.Min(n, guess + 1); c++)
+        {
+            int r = (n + c - 1) / c;
+            double cw = area.Width / c, ch = area.Height / r;
+            double score = Math.Max(cw / ch, ch / cw);
+            if (score < best)
+                (best, cols) = (score, c);
+        }
+        int rows = (n + cols - 1) / cols;
+        double w = area.Width / cols, h = area.Height / rows;
+        for (int i = 0; i < n; i++)
+            emit(items[i], new Rect(area.X + i % cols * w, area.Y + i / cols * h, w, h));
+    }
+
+    /// <summary>
+    /// Ordered strip treemap (Bederson, Shneiderman, Wattenberg): boxes keep their order in strips
+    /// across the area – rows down a tall area, columns across a wide one, so boxes stay closer to
+    /// square. A strip takes boxes while that keeps them closer to square on average.
+    /// </summary>
+    private static void Strips(List<(FsNode? Node, double Weight)> items, Rect area, Action<FsNode?, Rect> emit)
+    {
+        double total = items.Sum(i => i.Weight);
+        if (total <= 0 || area.Width < 0.5 || area.Height < 0.5)
+            return;
+
+        // Laid out as rows in "along × across" space; a wide area is transposed into columns.
+        bool columns = area.Width > area.Height;
+        double length = columns ? area.Height : area.Width, depth = columns ? area.Width : area.Height;
+        Rect Place(double along, double across, double size, double thickness) => columns
+            ? new Rect(area.X + across, area.Y + along, Math.Max(0, thickness), Math.Max(0, size))
+            : new Rect(area.X + along, area.Y + across, Math.Max(0, size), Math.Max(0, thickness));
+
+        double scale = length * depth / total, offset = 0;
+        int i = 0, n = items.Count;
+        while (i < n)
+        {
+            if (depth - offset < 0.5)
+                return;
+            int start = i;
+            double sum = 0, bestAverage = double.MaxValue;
+            while (i < n)
+            {
+                double next = sum + items[i].Weight * scale, thickness = next / length, aspects = 0;
+                for (int k = start; k <= i; k++)
+                {
+                    double size = items[k].Weight * scale / thickness;
+                    aspects += Math.Max(size / thickness, thickness / size);
+                }
+                double average = aspects / (i - start + 1);
+                if (i > start && average > bestAverage)
+                    break;
+                bestAverage = average;
+                sum = next;
+                i++;
+            }
+            double strip = sum / length, drawn = i >= n ? depth - offset : strip, along = 0;
+            for (int k = start; k < i; k++)
+            {
+                double size = k == i - 1 ? length - along : items[k].Weight * scale / strip;
+                emit(items[k].Node, Place(along, offset, size, drawn));
+                along += size;
+            }
+            offset += strip;
+        }
     }
 
     /// <summary>Squarified treemap (Bruls, Huizing, van Wijk). Items must be sorted largest first.</summary>
@@ -622,7 +802,7 @@ public sealed class TreemapControl : FrameworkElement
         var ink = Theme.LabelBrush(node, _colorMode, _nowTicks);
         DrawText(dc, node.Name, fill.X + 3, fill.Y + 1, fill.Width - 6, ink, 11, node.Kind == NodeKind.File);
         if (fill.Height >= 30)
-            DrawText(dc, Format.Bytes(node.Size), fill.X + 3, fill.Y + 15, fill.Width - 6, ink, 10.5);
+            DrawText(dc, _sort == MapSort.Date ? Format.Date(node.DateTicks) : Format.Bytes(node.Size), fill.X + 3, fill.Y + 15, fill.Width - 6, ink, 10.5);
     }
 
     private void DrawScanning(DrawingContext dc, FsNode node, Rect r, int depth)
@@ -658,7 +838,8 @@ public sealed class TreemapControl : FrameworkElement
         _labelBudget--;
 
         string name = node.DisplayName;
-        string size = Format.Bytes(DisplaySize(node));
+        // Sorted by name or date, a box's area counts images rather than bytes.
+        string size = _sort == MapSort.Size || node.IsScanning ? Format.Bytes(DisplaySize(node)) : Format.Count(node.VisibleCount(_showAssets), "image", "images");
 
         // A camera folder on a source card, or its archive: tinted strip and a note naming the other side.
         string note = node.PairNote != null && !dim ? $"  ·  {node.PairNote}" : "";
@@ -743,4 +924,15 @@ public sealed class TreemapControl : FrameworkElement
                 dc.DrawRectangle(Theme.SelectWash, Theme.TargetPen, box);
         }
     }
+}
+
+/// <summary>Names as Explorer sorts them: IMG_2 before IMG_10, ignoring case.</summary>
+internal sealed class NaturalOrder : IComparer<string>
+{
+    public static readonly NaturalOrder Instance = new();
+
+    [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
+    private static extern int StrCmpLogicalW(string a, string b);
+
+    public int Compare(string? a, string? b) => StrCmpLogicalW(a ?? "", b ?? "");
 }

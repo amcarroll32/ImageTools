@@ -1299,9 +1299,8 @@ public partial class MainWindow : Window
         var rows = new List<RowItem>();
         if (node.Children != null)
         {
-            var visible = node.Children
-                .Where(c => c.VisibleCount(ShowAssets) > 0 || c.IsScanning || (c.Kind == NodeKind.Drive && c.ScanError != null))
-                .OrderByDescending(Map.DisplaySize)
+            var visible = Map.Order(node.Children
+                    .Where(c => c.VisibleCount(ShowAssets) > 0 || c.IsScanning || (c.Kind == NodeKind.Drive && c.ScanError != null)))
                 .Take(MaxListRows);
 
             foreach (var c in visible)
@@ -2303,6 +2302,15 @@ public partial class MainWindow : Window
         RefreshSidePanel();
         RefreshSearch();
         UpdateStatus();
+    }
+
+    /// <summary>Size, name or date taken: the map and the Contents list follow it.</summary>
+    private void Sort_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_ready)
+            return;
+        Map.Sort = (MapSort)SortBox.SelectedIndex;
+        RefreshSidePanel();
     }
 
     private void ColorMode_Changed(object sender, SelectionChangedEventArgs e)
